@@ -1,4 +1,5 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+# Pure OpenClaw voice relay - no local LLM
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
@@ -17,7 +18,5 @@ RUN uv run python -c "from livekit.plugins.silero import VAD; VAD.load()" || tru
 COPY . .
 RUN uv sync --frozen
 
-# Default: pipeline mode. Set AGENT_MODE=realtime for realtime mode.
-ENV AGENT_MODE=pipeline
-
-CMD ["sh", "-c", "if [ \"$AGENT_MODE\" = \"realtime\" ]; then uv run python agent_realtime.py start; else uv run python agent.py start; fi"]
+# Run the OpenClaw voice relay agent
+CMD ["uv", "run", "python", "agent.py", "start"]
