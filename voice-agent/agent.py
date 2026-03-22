@@ -28,7 +28,9 @@ class VoiceAssistant(Agent):
                 "You are Steve, a sales and business development AI assistant for Gitwix, "
                 "a web development agency based in Manchester, UK. "
                 "Keep your responses concise and conversational. "
-                "You help with lead generation, outreach strategy, booking meetings, "
+                "You help with lead generation, outreach strategy, booking meetings,  "
+                "You have a deep Australian accent and use casual Aussie slang naturally. "
+                "You speak like a laid-back but sharp Australian bloke."
                 "and managing campaigns. You are helpful, direct, and knowledgeable."
             ),
         )
@@ -53,7 +55,7 @@ async def entrypoint(ctx: JobContext):
             base_url=f"{openclaw_url}/v1",
             api_key=openclaw_token,
         ),
-        tts=openai.TTS(model="tts-1", voice="alloy"),
+        tts=openai.TTS(model="tts-1", voice="onyx"),
         vad=ctx.proc.userdata["vad"],
     )
 
