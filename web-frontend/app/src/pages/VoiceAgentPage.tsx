@@ -151,7 +151,7 @@ export default function OpenClawPage() {
         transition: 'transform 0.3s ease',
         transform: isConnected ? 'scale(1)' : 'scale(0.9)',
       }}>
-        <AuraVisualizer mode={auraMode} rmsRef={combinedRmsRef} />
+        <AuraVisualizer auraMode={auraMode} rmsRef={combinedRmsRef} />
       </div>
 
       {/* Status */}
@@ -195,7 +195,6 @@ export default function OpenClawPage() {
           fontSize: '15px',
           fontWeight: 600,
           borderRadius: '100px',
-          border: 'none',
           cursor: isConnecting ? 'not-allowed' : 'pointer',
           transition: 'all 0.25s ease',
           outline: 'none',
