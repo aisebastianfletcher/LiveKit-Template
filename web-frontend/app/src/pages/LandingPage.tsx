@@ -1,37 +1,29 @@
-import { Link } from 'react-router-dom'
-
-const modes = [
-  {
-    href: '/pipeline',
-    title: 'Pipeline',
-    description: 'OpenAI STT \u2192 GPT-4o-mini \u2192 TTS',
-  },
-  {
-    href: '/realtime',
-    title: 'Realtime',
-    description: 'OpenAI Realtime API (speech-to-speech)',
-  },
-]
+import { useNavigate } from 'react-router-dom'
 
 export default function LandingPage() {
-  return (
-    <div className="flex items-center justify-center min-h-[100dvh] px-4">
-      <div className="max-w-[540px] w-full text-center">
-        <h1 className="text-xl sm:text-2xl font-bold text-white mb-1 sm:mb-2">LiveKit Voice Agent</h1>
-        <p className="text-xs sm:text-sm text-muted mb-6 sm:mb-8">Self-hosted on Railway</p>
+  const navigate = useNavigate()
 
-        <div className="flex flex-col gap-3 sm:gap-4">
-          {modes.map((m) => (
-            <Link
-              key={m.href}
-              to={m.href}
-              className="block p-4 sm:p-6 bg-surface border border-border rounded-xl no-underline text-foreground transition-all hover:border-blue-500 hover:bg-[#1e1e2e] active:scale-[0.98]"
-            >
-              <h2 className="text-base sm:text-lg font-semibold text-white mb-1 sm:mb-2">{m.title}</h2>
-              <p className="text-xs sm:text-sm text-muted">{m.description}</p>
-            </Link>
-          ))}
+  return (
+    <div className="flex items-center justify-center min-h-[100dvh] px-4 bg-black">
+      <div className="max-w-[420px] w-full text-center">
+
+        <div className="mb-10">
+          <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center mx-auto mb-6">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+            </svg>
+          </div>
+          <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">Steve</h1>
+          <p className="text-sm text-white/40">Gitwix Sales &amp; Outreach</p>
         </div>
+
+        <button
+          onClick={() => navigate('/pipeline')}
+          className="w-full py-4 px-6 bg-white text-black font-semibold rounded-2xl text-base hover:bg-white/90 active:scale-[0.98] transition-all"
+        >
+          Start Conversation
+        </button>
+
       </div>
     </div>
   )
