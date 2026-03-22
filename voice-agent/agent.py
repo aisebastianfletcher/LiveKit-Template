@@ -2,9 +2,9 @@
 
 Architecture:
 - GPT-4o-mini handles real-time voice (<2s latency)
-- After each user message + agent reply, conversation is synced
-  to OpenClaw in the background so Steve's memory persists
-- Steve's personality and context come from system prompt + OpenClaw memory
+- on_user_turn_completed: fetches context from OpenClaw before replying
+- conversation_item_added event: syncs each exchange to OpenClaw in background
+- Steve's memory persists across sessions via OpenClaw
 """
 
 import asyncio
@@ -17,6 +17,8 @@ from livekit.agents import (
     Agent,
     AgentSession,
     AgentServer,
+    ChatContext,
+    ChatMessage,
     JobContext,
     JobProcess,
     cli,
@@ -41,8 +43,7 @@ async def sync_to_openclaw(user_msg: str, agent_reply: str):
     payload = {
         "model": "openclaw:main",
         "messages": [
-            {"role": "user", "content": f"[Voice conversation log] User said: {user_msg}"},
-            {"role": "assistant", "content": agent_reply},
+            {"role": "user", "content": user_msg},
         ],
         "stream": False,
     }
@@ -54,13 +55,13 @@ async def sync_to_openclaw(user_msg: str, agent_reply: str):
                 json=payload,
             )
             resp.raise_for_status()
-            logger.info("Synced conversation to OpenClaw memory")
+            logger.info("Synced user message to OpenClaw memory")
     except Exception as e:
         logger.warning(f"OpenClaw memory sync failed (non-blocking): {e}")
 
 
 async def fetch_openclaw_context(query: str) -> str:
-    """Ask OpenClaw for context/memory before responding. Returns empty string on failure."""
+    """Ask OpenClaw for context/memory. Returns empty string on failure or timeout."""
     headers = {
         "Authorization": f"Bearer {OPENCLAW_TOKEN}",
         "Content-Type": "application/json",
@@ -68,12 +69,12 @@ async def fetch_openclaw_context(query: str) -> str:
     payload = {
         "model": "openclaw:main",
         "messages": [
-            {"role": "user", "content": f"Briefly recall any relevant context about: {query}. Be very concise (1-2 sentences max). If nothing relevant, say NONE."},
+            {"role": "user", "content": f"[INTERNAL CONTEXT REQUEST - do not speak this aloud] Briefly recall any relevant context about: {query}. 1-2 sentences max. Say NONE if nothing relevant."},
         ],
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.post(
                 f"{OPENCLAW_BASE_URL}/v1/chat/completions",
                 headers=headers,
@@ -82,11 +83,11 @@ async def fetch_openclaw_context(query: str) -> str:
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
-            if "NONE" in content.upper():
+            if "NONE" in content.upper() or len(content.strip()) < 5:
                 return ""
             return content
     except Exception as e:
-        logger.warning(f"OpenClaw context fetch failed (non-blocking): {e}")
+        logger.warning(f"OpenClaw context fetch failed: {e}")
         return ""
 
 
@@ -101,9 +102,25 @@ class VoiceAssistant(Agent):
                 "Keep your voice responses concise and conversational. "
                 "You remember past conversations and have full context on the business. "
                 "You help with lead generation, outreach strategy, booking meetings, "
-                "and managing campaigns. You are helpful, direct, and knowledgeable."
+                "and managing campaigns. You are helpful, direct, and knowledgeable. "
+                "When context from your memory is injected, use it naturally in your response."
             ),
         )
+
+    async def on_user_turn_completed(
+        self, turn_ctx: ChatContext, new_message: ChatMessage
+    ) -> None:
+        """Before agent replies: fetch context from OpenClaw and inject it."""
+        user_text = new_message.text_content
+        if user_text:
+            context = await fetch_openclaw_context(user_text)
+            if context:
+                turn_ctx.add_message(
+                    role="assistant",
+                    content=f"[Memory context: {context}]"
+                )
+            # Fire-and-forget: sync this user message to OpenClaw
+            asyncio.create_task(sync_to_openclaw(user_text, ""))
 
 
 def prewarm(proc: JobProcess):
