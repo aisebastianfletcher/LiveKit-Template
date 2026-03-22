@@ -12,12 +12,12 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project
+COPY pyproject.toml ./
+RUN uv sync --no-install-project
 
 COPY main.py ./
 COPY --from=frontend-build /dist ./dist
 
-RUN uv sync --frozen
+RUN uv sync
 
 CMD ["uv", "run", "python", "main.py"]
