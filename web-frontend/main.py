@@ -4,15 +4,17 @@ import os
 import uuid
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from livekit import api
+import httpx
 
 app = FastAPI(title="LiveKit Voice Agent")
 
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
+OPENCLAW_API = os.environ.get("OPENCLAW_API", "https://openclaw-production-058c.up.railway.app")
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
 
@@ -41,17 +43,34 @@ async def create_token(request: Request):
     }
 
 
+@app.post("/api/openclaw/chat")
+async def proxy_openclaw_chat(request: Request):
+    """Proxy text chat requests to OpenClaw API to avoid CORS issues."""
+    body = await request.json()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.post(
+                f"{OPENCLAW_API}/v1/chat/completions",
+                json=body,
+                headers={"Content-Type": "application/json"},
+            )
+            return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=502,
+            )
+
+
 # --- SPA static files ---
 
 if os.path.isdir(os.path.join(DIST_DIR, "assets")):
     app.mount("/assets", StaticFiles(directory=os.path.join(DIST_DIR, "assets")), name="assets")
 
-
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     """Catch-all: serve index.html for client-side routing."""
     return FileResponse(os.path.join(DIST_DIR, "index.html"))
-
 
 if __name__ == "__main__":
     import uvicorn
