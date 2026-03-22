@@ -7,8 +7,6 @@ import useAudioAnalyser from '@/hooks/useAudioAnalyser'
 
 const SPEAKING_THRESHOLD = 0.02
 
-const OPENCLAW_API = 'https://openclaw-production-058c.up.railway.app'
-
 const SKILLS = [
   { id: 'email', label: 'Email', connected: false },
   { id: 'calendar', label: 'Calendar', connected: false },
@@ -74,7 +72,7 @@ export default function OpenClawPage() {
     setChatMessages(prev => [...prev, { role: 'user', text: userMsg, timestamp: new Date() }])
     setIsSending(true)
     try {
-      const res = await fetch(`${OPENCLAW_API}/v1/chat/completions`, {
+      const res = await fetch('/api/openclaw/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
