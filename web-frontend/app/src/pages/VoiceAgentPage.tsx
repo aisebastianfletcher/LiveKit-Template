@@ -7,11 +7,19 @@ import useAudioAnalyser from '@/hooks/useAudioAnalyser'
 
 const SPEAKING_THRESHOLD = 0.02
 
+const OPENCLAW_API = 'https://openclaw-production-058c.up.railway.app'
+
 const SKILLS = [
   { id: 'email', label: 'Email', connected: false },
   { id: 'calendar', label: 'Calendar', connected: false },
   { id: 'web', label: 'Web Search', connected: false },
 ]
+
+interface ChatMessage {
+  role: 'user' | 'assistant'
+  text: string
+  timestamp: Date
+}
 
 export default function OpenClawPage() {
   const {
@@ -23,6 +31,10 @@ export default function OpenClawPage() {
   const combinedRmsRef = useRef(0)
   const [auraMode, setAuraMode] = useState<AuraMode>('disconnected')
   const transcriptEndRef = useRef<HTMLDivElement>(null)
+  const [textInput, setTextInput] = useState('')
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [isSending, setIsSending] = useState(false)
+  const chatEndRef = useRef<HTMLDivElement>(null)
 
   const isConnected = status === 'connected'
   const isConnecting = status === 'connecting'
@@ -33,129 +45,187 @@ export default function OpenClawPage() {
       combinedRmsRef.current = 0
       return
     }
-    let frameId: number
-    function update() {
-      const micRms = micRmsRef.current ?? 0
-      const agentRms = agentRmsRef.current ?? 0
-      let mode: AuraMode
-      let rms: number
-      if (agentRms > SPEAKING_THRESHOLD && agentRms >= micRms) {
-        mode = 'agent-speaking'; rms = agentRms
-      } else if (micRms > SPEAKING_THRESHOLD) {
-        mode = 'user-speaking'; rms = micRms
-      } else {
-        mode = 'idle'; rms = Math.max(micRms, agentRms)
-      }
-      combinedRmsRef.current = rms
-      setAuraMode(mode)
-      frameId = requestAnimationFrame(update)
+    let animId: number
+    const loop = () => {
+      const mic = micRmsRef.current
+      const agent = agentRmsRef.current
+      combinedRmsRef.current = Math.max(mic, agent)
+      if (agent > SPEAKING_THRESHOLD) setAuraMode('speaking')
+      else if (mic > SPEAKING_THRESHOLD) setAuraMode('listening')
+      else setAuraMode('idle')
+      animId = requestAnimationFrame(loop)
     }
-    frameId = requestAnimationFrame(update)
-    return () => { cancelAnimationFrame(frameId) }
-  }, [status, micRmsRef, agentRmsRef])
+    animId = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(animId)
+  }, [status])
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [segments])
 
-  const gold = '#C4944F'
-  const goldLight = '#D4A96A'
-  const lastSegment = segments[segments.length - 1]
-  const transcript = lastSegment?.text ?? ''
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages])
+
+  const sendTextToOpenClaw = async () => {
+    if (!textInput.trim() || isSending) return
+    const userMsg = textInput.trim()
+    setTextInput('')
+    setChatMessages(prev => [...prev, { role: 'user', text: userMsg, timestamp: new Date() }])
+    setIsSending(true)
+    try {
+      const res = await fetch(`${OPENCLAW_API}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'openclaw:main',
+          messages: [{ role: 'user', content: userMsg }],
+          stream: false,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const reply = data.choices?.[0]?.message?.content || 'No response'
+        setChatMessages(prev => [...prev, { role: 'assistant', text: reply, timestamp: new Date() }])
+      } else {
+        const errText = await res.text()
+        setChatMessages(prev => [...prev, { role: 'assistant', text: `Error ${res.status}: ${errText}`, timestamp: new Date() }])
+      }
+    } catch (err: any) {
+      setChatMessages(prev => [...prev, { role: 'assistant', text: `Connection error: ${err.message}`, timestamp: new Date() }])
+    }
+    setIsSending(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      sendTextToOpenClaw()
+    }
+  }
 
   return (
-    <div style={{ display: 'flex', height: '100dvh', background: '#08080d', fontFamily: "'Inter',-apple-system,sans-serif", color: '#fff' }}>
-
-      {/* ===== LEFT SIDEBAR ===== */}
-      <aside style={{ width: 280, minWidth: 280, borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', background: '#0a0a10' }}>
-
-        {/* Logo */}
-        <div style={{ padding: '20px 20px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+    <div style={{ display: 'flex', height: '100vh', background: '#0a0a0a', color: '#e0e0e0', fontFamily: "'Inter', sans-serif" }}>
+      {/* Sidebar */}
+      <div style={{ width: 280, borderRight: '1px solid #1a1a1a', display: 'flex', flexDirection: 'column', background: '#0d0d0d' }}>
+        <div style={{ padding: '20px 16px', borderBottom: '1px solid #1a1a1a', display: 'flex', alignItems: 'center', gap: 10 }}>
           <OpenClawLogo size={28} />
-          <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.08em', color: goldLight }}>OPENCLAW</span>
+          <span style={{ fontWeight: 700, fontSize: 15, color: '#c9a84c', letterSpacing: 1 }}>OPENCLAW</span>
         </div>
 
-        {/* Connection status */}
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: isConnected ? '#22c55e' : '#555' }} />
-            <span style={{ fontSize: 12, color: isConnected ? '#22c55e' : 'rgba(255,255,255,0.3)' }}>
-              {isConnected ? 'Connected' : isConnecting ? 'Connecting...' : 'Disconnected'}
-            </span>
+        <div style={{ padding: '12px 16px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: isConnected ? '#4ade80' : '#666' }} />
+          <span style={{ color: isConnected ? '#4ade80' : '#888' }}>{isConnected ? 'Connected' : 'Disconnected'}</span>
+        </div>
+
+        {/* Voice Transcript */}
+        <div style={{ padding: '8px 16px' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#666', letterSpacing: 1, marginBottom: 8 }}>VOICE TRANSCRIPT</div>
+          <div style={{ maxHeight: 180, overflowY: 'auto', fontSize: 12 }}>
+            {segments.length === 0 ? (
+              <div style={{ color: '#444', fontStyle: 'italic' }}>Start a voice session to see transcript</div>
+            ) : (
+              segments.map((seg, i) => (
+                <div key={i} style={{ marginBottom: 6, padding: '4px 8px', borderRadius: 4, background: seg.speaker === 'user' ? '#1a1a2e' : '#1a2e1a' }}>
+                  <span style={{ fontSize: 10, color: seg.speaker === 'user' ? '#6b7bff' : '#4ade80', fontWeight: 600 }}>
+                    {seg.speaker === 'user' ? 'You' : 'OpenClaw'}
+                  </span>
+                  <div style={{ color: '#ccc', marginTop: 2 }}>{seg.text}</div>
+                </div>
+              ))
+            )}
+            <div ref={transcriptEndRef} />
           </div>
         </div>
 
-        {/* Live transcript */}
-        <div style={{ padding: '12px 16px 8px' }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: 10 }}>Conversation</div>
-        </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px' }}>
-          {!isConnected && segments.length === 0 && (
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.15)', padding: '8px 0', fontStyle: 'italic' }}>Start a session to see the conversation here</div>
-          )}
-          {segments.map((seg, i) => (
-            <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-              <div style={{ fontSize: 11, color: gold, marginBottom: 2 }}>{seg.speaker === 'user' ? 'You' : 'OpenClaw'}</div>
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.4 }}>{seg.text}</div>
-            </div>
-          ))}
-          <div ref={transcriptEndRef} />
+        {/* Text Chat */}
+        <div style={{ flex: 1, padding: '8px 16px', display: 'flex', flexDirection: 'column', borderTop: '1px solid #1a1a1a' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#666', letterSpacing: 1, marginBottom: 8 }}>TEXT CHAT (OPENCLAW API)</div>
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, maxHeight: 250, marginBottom: 8 }}>
+            {chatMessages.length === 0 ? (
+              <div style={{ color: '#444', fontStyle: 'italic', fontSize: 12 }}>Type a message to test OpenClaw</div>
+            ) : (
+              chatMessages.map((msg, i) => (
+                <div key={i} style={{ marginBottom: 6, padding: '6px 8px', borderRadius: 4, background: msg.role === 'user' ? '#1a1a2e' : '#1a2e1a' }}>
+                  <span style={{ fontSize: 10, color: msg.role === 'user' ? '#6b7bff' : '#4ade80', fontWeight: 600 }}>
+                    {msg.role === 'user' ? 'You' : 'OpenClaw'}
+                  </span>
+                  <div style={{ color: '#ccc', marginTop: 2, fontSize: 12, whiteSpace: 'pre-wrap' }}>{msg.text}</div>
+                </div>
+              ))
+            )}
+            <div ref={chatEndRef} />
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              type="text"
+              value={textInput}
+              onChange={e => setTextInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Message OpenClaw..."
+              disabled={isSending}
+              style={{
+                flex: 1, padding: '8px 12px', borderRadius: 6, border: '1px solid #333', background: '#111',
+                color: '#e0e0e0', fontSize: 12, outline: 'none',
+              }}
+            />
+            <button
+              onClick={sendTextToOpenClaw}
+              disabled={isSending || !textInput.trim()}
+              style={{
+                padding: '8px 14px', borderRadius: 6, border: 'none', background: '#c9a84c', color: '#000',
+                fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: isSending || !textInput.trim() ? 0.5 : 1,
+              }}
+            >
+              {isSending ? '...' : 'Send'}
+            </button>
+          </div>
         </div>
 
-        {/* Skills status */}
-        <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '12px 16px' }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', marginBottom: 8 }}>Skills</div>
+        {/* Skills */}
+        <div style={{ padding: '12px 16px', borderTop: '1px solid #1a1a1a' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#666', letterSpacing: 1, marginBottom: 8 }}>SKILLS</div>
           {SKILLS.map(s => (
-            <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 0' }}>
-              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>{s.label}</span>
-              <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 100, background: s.connected ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)', color: s.connected ? '#22c55e' : 'rgba(255,255,255,0.25)', fontWeight: 500 }}>
+            <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', fontSize: 12 }}>
+              <span style={{ color: '#999' }}>{s.label}</span>
+              <span style={{ fontSize: 10, color: s.connected ? '#4ade80' : '#666', background: s.connected ? '#1a2e1a' : '#1a1a1a', padding: '2px 8px', borderRadius: 10 }}>
                 {s.connected ? 'Active' : 'Not connected'}
               </span>
             </div>
           ))}
         </div>
 
-        <div style={{ padding: '10px 16px', borderTop: '1px solid rgba(255,255,255,0.06)', fontSize: 10, color: 'rgba(255,255,255,0.12)' }}>Powered by OpenClaw AI</div>
-      </aside>
+        <div style={{ padding: '12px 16px', borderTop: '1px solid #1a1a1a', fontSize: 10, color: '#444' }}>
+          Powered by OpenClaw AI
+        </div>
+      </div>
 
-      {/* ===== MAIN CONTENT ===== */}
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+      {/* Main Area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <h1 style={{ fontSize: 36, fontWeight: 700, marginBottom: 4 }}>OpenClaw Control Centre</h1>
+        <p style={{ color: '#888', marginBottom: 40 }}>Voice-powered AI assistant</p>
 
-        {isConnected && (
-          <div style={{ position: 'absolute', width: 500, height: 500, borderRadius: '50%', background: 'radial-gradient(circle, rgba(196,148,79,0.06) 0%, transparent 70%)', top: '50%', left: '50%', transform: 'translate(-50%,-55%)', pointerEvents: 'none' }} />
-        )}
-
-        <h1 style={{ fontSize: 'clamp(24px,4vw,36px)', fontWeight: 700, color: '#fff', margin: '0 0 4px', letterSpacing: '-0.02em', textAlign: 'center' }}>OpenClaw Control Centre</h1>
-        <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.25)', margin: '0 0 40px', textAlign: 'center' }}>Voice-powered AI assistant</p>
-
-        <div style={{ width: 200, height: 200, marginBottom: 28, transition: 'transform 0.3s', transform: isConnected ? 'scale(1)' : 'scale(0.85)' }}>
-          <AuraVisualizer auraMode={auraMode} rmsRef={combinedRmsRef} />
+        <div style={{ position: 'relative', width: 280, height: 280 }}>
+          <AuraVisualizer mode={auraMode} rmsRef={combinedRmsRef} />
         </div>
 
-        <div style={{ fontSize: 12, fontWeight: 500, color: isConnected ? (auraMode === 'agent-speaking' ? goldLight : 'rgba(255,255,255,0.35)') : 'rgba(255,255,255,0.2)', marginBottom: 14, minHeight: 18 }}>
-          {isConnected ? (auraMode === 'agent-speaking' ? 'OpenClaw is speaking...' : 'Listening...') : isConnecting ? 'Connecting...' : 'Ready'}
-        </div>
-
-        <div style={{ minHeight: 40, maxWidth: 380, width: '100%', textAlign: 'center', marginBottom: 32 }}>
-          {transcript && <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.5)', margin: 0, lineHeight: 1.5, fontStyle: 'italic' }}>'{transcript}'</p>}
+        <div style={{ marginTop: 16, fontSize: 14, color: '#888' }}>
+          {isConnecting ? 'Connecting...' : isConnected ? (auraMode === 'speaking' ? 'OpenClaw is speaking' : auraMode === 'listening' ? 'Listening...' : 'Connected') : 'Ready'}
         </div>
 
         <button
           onClick={isConnected ? disconnect : connect}
           disabled={isConnecting}
           style={{
-            padding: '14px 52px', fontSize: 14, fontWeight: 600, borderRadius: 100,
-            cursor: isConnecting ? 'not-allowed' : 'pointer', transition: 'all 0.25s', outline: 'none',
-            background: isConnected ? 'rgba(220,38,38,0.12)' : isConnecting ? 'rgba(255,255,255,0.04)' : `linear-gradient(135deg, ${gold}, ${goldLight})`,
-            color: isConnected ? '#ef4444' : isConnecting ? '#444' : '#fff',
-            border: isConnected ? '1px solid rgba(220,38,38,0.25)' : '1px solid rgba(255,255,255,0.06)',
-            boxShadow: isConnected || isConnecting ? 'none' : '0 0 50px rgba(196,148,79,0.25), 0 4px 20px rgba(0,0,0,0.4)',
-            minWidth: 190,
+            marginTop: 32, padding: '14px 48px', borderRadius: 32, border: 'none', fontSize: 16, fontWeight: 600,
+            cursor: isConnecting ? 'not-allowed' : 'pointer',
+            background: isConnected ? '#333' : 'linear-gradient(135deg, #c9a84c, #b8943f)',
+            color: isConnected ? '#e0e0e0' : '#000',
           }}
         >
-          {isConnecting ? 'Connecting...' : isConnected ? 'End Session' : 'Start OpenClaw'}
+          {isConnecting ? 'Connecting...' : isConnected ? 'Stop OpenClaw' : 'Start OpenClaw'}
         </button>
-      </main>
+      </div>
     </div>
   )
 }
