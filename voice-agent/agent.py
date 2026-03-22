@@ -1,5 +1,4 @@
 import logging
-# Voice relay: mic -> STT -> OpenClaw API -> TTS -> speaker
 import os
 
 from livekit.agents import (
@@ -17,12 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 server = AgentServer()
 
-# OpenClaw backend URL - this is the brain
-OPENCLAW_BASE_URL = os.environ.get(
-    "OPENCLAW_BASE_URL",
-    "https://openclaw-production-058c.up.railway.app"
-)
-OPENCLAW_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+INSTRUCTIONS = """You are OpenClaw, a voice AI assistant. Keep responses very short (1-2 sentences). You are in early development. You do NOT have any skills connected yet - no email, no calendar, no web access. Be honest about this. You can only have voice conversations right now. Never pretend you have done tasks or have access to systems you don't."""
 
 
 def prewarm(proc: JobProcess):
@@ -34,36 +28,22 @@ server.setup_fnc = prewarm
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    logger.info("[OPENCLAW] New session - connecting voice to OpenClaw backend")
-
-    # Point the LLM directly at OpenClaw's API.
-    # OpenClaw exposes an OpenAI-compatible /v1/chat/completions endpoint.
-    # This means ALL intelligence, personality, and responses come from OpenClaw.
-    # The voice agent is purely a vessel: mic -> text -> OpenClaw -> speech.
-    openclaw_llm = openai.LLM(
-        model="openclaw:main",
-        base_url=f"{OPENCLAW_BASE_URL}/v1",
-        api_key=OPENCLAW_TOKEN if OPENCLAW_TOKEN else "not-needed",
-        temperature=0.7,
-    )
+    logger.info("[OPENCLAW] New voice session started")
 
     session = AgentSession(
         stt=openai.STT(model="whisper-1"),
-        llm=openclaw_llm,
+        llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),
         tts=openai.TTS(model="tts-1", voice="onyx"),
         vad=ctx.proc.userdata["vad"],
     )
 
-    # No system prompt here - OpenClaw owns the prompt and personality.
-    # The Agent has no instructions because OpenClaw IS the brain.
     await session.start(
-        agent=Agent(instructions=""),
+        agent=Agent(instructions=INSTRUCTIONS),
         room=ctx.room,
     )
 
-    # Let OpenClaw generate its own greeting
     await session.generate_reply(
-        instructions="Greet the user."
+        instructions="Say hello briefly. One short sentence."
     )
 
 
