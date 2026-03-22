@@ -1,6 +1,7 @@
-"""Pipeline voice agent: OpenAI STT → GPT-4o-mini → OpenAI TTS."""
+"""Pipeline voice agent: OpenAI STT -> OpenClaw (Steve) -> OpenAI TTS."""
 
 import logging
+import os
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -11,6 +12,7 @@ from livekit.agents import (
     JobProcess,
     cli,
 )
+
 from livekit.plugins import openai, silero
 
 load_dotenv()
@@ -23,9 +25,11 @@ class VoiceAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are a friendly voice AI assistant. "
+                "You are Steve, a sales and business development AI assistant for Gitwix, "
+                "a web development agency based in Manchester, UK. "
                 "Keep your responses concise and conversational. "
-                "You are helpful, witty, and knowledgeable."
+                "You help with lead generation, outreach strategy, booking meetings, "
+                "and managing campaigns. You are helpful, direct, and knowledgeable."
             ),
         )
 
@@ -39,16 +43,23 @@ server.setup_fnc = prewarm
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
+    openclaw_url = os.environ.get("OPENCLAW_BASE_URL", "https://openclaw-production-058c.up.railway.app")
+    openclaw_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+
     session = AgentSession(
         stt=openai.STT(model="whisper-1"),
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(
+            model="openclaw:main",
+            base_url=f"{openclaw_url}/v1",
+            api_key=openclaw_token,
+        ),
         tts=openai.TTS(model="tts-1", voice="alloy"),
         vad=ctx.proc.userdata["vad"],
     )
 
     await session.start(agent=VoiceAssistant(), room=ctx.room)
     await session.generate_reply(
-        instructions="Greet the user and offer your assistance."
+        instructions="Greet the user as Steve and ask what they need help with today."
     )
 
 
