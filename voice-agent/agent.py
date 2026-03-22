@@ -1,4 +1,5 @@
 import logging
+# Voice relay: mic -> STT -> OpenClaw API -> TTS -> speaker
 import os
 
 from livekit.agents import (
