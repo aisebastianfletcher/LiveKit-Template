@@ -1,4 +1,5 @@
 """Hybrid voice agent: GPT-4o-mini for fast voice + OpenClaw memory sync.
+# v2 - force deploy
 
 Architecture:
 - GPT-4o-mini handles real-time voice (<2s latency)
