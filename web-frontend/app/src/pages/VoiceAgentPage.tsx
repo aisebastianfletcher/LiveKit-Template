@@ -95,7 +95,7 @@ export default function OpenClawPage() {
           )}
           {segments.map((seg, i) => (
             <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-              <div style={{ fontSize: 11, color: gold, marginBottom: 2 }}>{seg.source === 'user' ? 'You' : 'OpenClaw'}</div>
+              <div style={{ fontSize: 11, color: gold, marginBottom: 2 }}>{seg.speaker === 'user' ? 'You' : 'OpenClaw'}</div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.4 }}>{seg.text}</div>
             </div>
           ))}
