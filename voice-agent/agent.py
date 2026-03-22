@@ -51,45 +51,7 @@ When asked for updates or status:
 - Give a brief, direct summary of activity
 - Be honest if something isn't working
 - Suggest what to do next
-
-If memory context is provided at the start of a message in [Memory: ...], use that naturally - don't mention or read out the memory tag.
 """
-
-
-async def fetch_openclaw_context(query: str) -> str:
-    """Fetch relevant task/memory context from OpenClaw - with strict timeout."""
-    if not OPENCLAW_TOKEN:
-        return ""
-    headers = {
-        "Authorization": f"Bearer {OPENCLAW_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "openclaw:main",
-        "messages": [
-            {
-                "role": "user",
-                "content": f"In 1-2 sentences max, recall any relevant tasks, updates, or context about: {query}. Reply NONE if nothing relevant."
-            }
-        ],
-        "stream": False,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{OPENCLAW_BASE_URL}/v1/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-            if "NONE" in content.upper() or len(content) < 5:
-                return ""
-            logger.info(f"[OPENCLAW] Context: {content[:80]}")
-            return content
-    except Exception as e:
-        logger.warning(f"[OPENCLAW] Context fetch skipped: {e}")
-        return ""
 
 
 async def sync_to_openclaw(role: str, content: str):
@@ -124,34 +86,16 @@ class Steve(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: ChatContext, new_message: ChatMessage
     ) -> None:
+        """Sync user message to OpenClaw in background - never blocks voice response."""
         user_text = None
         try:
             tc = new_message.text_content
             user_text = tc() if callable(tc) else tc
         except Exception:
             pass
-
-        if not user_text:
-            return
-
-        logger.info(f"[STEVE] User: {user_text}")
-
-        # Try to pull relevant OpenClaw context (non-blocking, 5s max)
-        try:
-            context = await asyncio.wait_for(
-                fetch_openclaw_context(user_text),
-                timeout=5.0
-            )
-            if context:
-                turn_ctx.add_message(
-                    role="system",
-                    content=f"[Memory: {context}]"
-                )
-        except asyncio.TimeoutError:
-            pass
-
-        # Sync to OpenClaw in background
-        asyncio.create_task(sync_to_openclaw("user", user_text))
+        if user_text:
+            logger.info(f"[STEVE] User: {user_text[:80]}")
+            asyncio.create_task(sync_to_openclaw("user", user_text))
 
 
 def prewarm(proc: JobProcess):
@@ -172,7 +116,7 @@ async def entrypoint(ctx: JobContext):
     )
     await session.start(agent=Steve(), room=ctx.room)
     await session.generate_reply(
-        instructions="You just picked up. Say something short - a natural Aussie greeting. Vary it every time. Don't be predictable. No more than one sentence."
+        instructions="You just picked up a voice call. Say one short natural Aussie greeting - vary it every time, never the same opener twice."
     )
 
 
