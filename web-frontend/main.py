@@ -15,6 +15,7 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
 OPENCLAW_API = os.environ.get("OPENCLAW_API", "https://openclaw-production-058c.up.railway.app")
+OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
 
@@ -47,12 +48,13 @@ async def create_token(request: Request):
 async def proxy_openclaw_chat(request: Request):
     """Proxy text chat requests to OpenClaw API to avoid CORS issues."""
     body = await request.json()
+        body.setdefault("model", "openclaw:main")
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.post(
-                f"{OPENCLAW_API}/v1/chat/completions",
+                                f"{OPENCLAW_API}/v1/chat/completions",
                 json=body,
-                headers={"Content-Type": "application/json"},
+                                headers={"Content-Type": "application/json", "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}"},
             )
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
