@@ -22,7 +22,7 @@ MEMORY_FILES = ["memory/profile.md", "memory/tasks.md", "memory/conversations.md
 OPENCLAW_BASE_URL = os.environ.get("OPENCLAW_BASE_URL", "https://openclaw-production-058c.up.railway.app")
 OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 # The OpenAI-compatible endpoint Open WebUI exposes
-OPENCLAW_API_BASE = f"{OPENCLAW_BASE_URL.rstrip('/')}/api"
+OPENCLAW_API_BASE = f"{OPENCLAW_BASE_URL.rstrip('/')}/v1"
 
 BASE_INSTRUCTIONS = """You are OpenClaw, a stateful voice AI assistant with persistent memory.
 Keep responses short (1-2 sentences) unless asked for detail.
@@ -117,7 +117,7 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         # LLM routes through OpenClaw's OpenAI-compatible endpoint
         llm=openai.LLM(
-            model="gpt-4o-mini",
+            model="openclaw",
             temperature=0.7,
             base_url=OPENCLAW_API_BASE,
             api_key=OPENCLAW_GATEWAY_TOKEN,
@@ -162,7 +162,7 @@ async def entrypoint(ctx: JobContext):
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "gpt-4o-mini",
+                        "model": "openclaw",
                         "messages": [
                             {"role": "system", "content": "Summarize this conversation in 2-3 sentences. Note any tasks, preferences, or facts the user shared. Be concise."},
                             {"role": "user", "content": transcript},
