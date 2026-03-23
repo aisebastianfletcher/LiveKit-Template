@@ -48,13 +48,13 @@ async def create_token(request: Request):
 async def proxy_openclaw_chat(request: Request):
     """Proxy text chat requests to OpenClaw API to avoid CORS issues."""
     body = await request.json()
-        body.setdefault("model", "openclaw:main")
+    body.setdefault("model", "openclaw:main")
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.post(
-                                f"{OPENCLAW_API}/v1/chat/completions",
+                f"{OPENCLAW_API}/v1/chat/completions",
                 json=body,
-                                headers={"Content-Type": "application/json", "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}"},
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}"},
             )
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
