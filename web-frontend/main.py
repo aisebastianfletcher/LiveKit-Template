@@ -14,7 +14,7 @@ app = FastAPI(title="LiveKit Voice Agent")
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
-OPENCLAW_API = os.environ.get("OPENCLAW_API", "http://openclaw.railway.internal:18789")
+OPENCLAW_API = os.environ.get("OPENCLAW_API", "http://openclaw.railway.internal:8080")
 OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
