@@ -1,5 +1,5 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
-# Pure OpenClaw voice relay - no local LLM
+# OpenClaw voice relay with Redis memory
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
@@ -7,16 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install dependencies from lockfile
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project
+# Install dependencies - resolve fresh since lockfile may be stale
+COPY pyproject.toml ./
+RUN uv sync --no-install-project
 
 # Download Silero VAD model files
 RUN uv run python -c "from livekit.plugins.silero import VAD; VAD.load()" || true
 
 # Copy agent source
 COPY . .
-RUN uv sync --frozen
+RUN uv sync
 
 # Run the OpenClaw voice relay agent
 CMD ["uv", "run", "python", "agent.py", "start"]
