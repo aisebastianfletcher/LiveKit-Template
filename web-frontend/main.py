@@ -18,7 +18,6 @@ LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
 # OpenClaw config for text chat
 OPENCLAW_BASE_URL = os.environ.get("OPENCLAW_BASE_URL", "https://openclaw-production-058c.up.railway.app")
 OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
-OPENCLAW_API_BASE = f"{OPENCLAW_BASE_URL.rstrip('/')}/api"
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
 
@@ -47,18 +46,21 @@ async def create_token(request: Request):
         "identity": identity,
     }
 
-
 @app.post("/api/openclaw/chat")
 async def proxy_openclaw_chat(request: Request):
     """Proxy text chat requests through OpenClaw's OpenAI-compatible API."""
     body = await request.json()
     messages = body.get("messages", [])
 
+    # Build the chat completions URL
+    base = OPENCLAW_BASE_URL.rstrip("/")
+    url = f"{base}/v1/chat/completions"
+
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             resp = await client.post(
-                f"{OPENCLAW_API_BASE}/chat/completions",
-                json={"model": "gpt-4o-mini", "messages": messages},
+                url,
+                json={"model": "openclaw", "messages": messages},
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}",
@@ -71,7 +73,6 @@ async def proxy_openclaw_chat(request: Request):
             return JSONResponse(content={"reply": reply})
         except Exception as e:
             return JSONResponse(content={"error": str(e)}, status_code=500)
-
 
 # --- Tasks API ---
 
@@ -149,7 +150,6 @@ async def delete_agent(agent_id: str):
     agents = [a for a in agents if a["id"] != agent_id]
     return JSONResponse(content={"ok": True})
 
-
 # --- SPA static files ---
 
 if os.path.isdir(os.path.join(DIST_DIR, "assets")):
@@ -159,7 +159,6 @@ if os.path.isdir(os.path.join(DIST_DIR, "assets")):
 async def serve_spa(full_path: str):
     """Catch-all: serve index.html for client-side routing."""
     return FileResponse(os.path.join(DIST_DIR, "index.html"))
-
 
 if __name__ == "__main__":
     import uvicorn
