@@ -2,6 +2,7 @@
 import os
 import uuid
 import json
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -17,6 +18,9 @@ LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
+
+# In-memory task store
+tasks: list[dict] = []
 
 # --- API ---
 
@@ -43,7 +47,6 @@ async def create_token(request: Request):
 async def proxy_openclaw_chat(request: Request):
     """Proxy text chat requests directly to OpenRouter API."""
     body = await request.json()
-    # Map to OpenRouter format
     messages = body.get("messages", [])
     model = OPENROUTER_MODEL
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -67,6 +70,45 @@ async def proxy_openclaw_chat(request: Request):
                 content={"error": f"Proxy error: {type(e).__name__}: {str(e)}"},
                 status_code=502,
             )
+
+# --- Tasks API ---
+
+@app.get("/api/tasks")
+async def get_tasks():
+    return JSONResponse(content=tasks)
+
+@app.post("/api/tasks")
+async def create_task(request: Request):
+    body = await request.json()
+    task = {
+        "id": uuid.uuid4().hex[:8],
+        "title": body.get("title", "Untitled task"),
+        "status": body.get("status", "pending"),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "source": body.get("source", "user"),
+    }
+    tasks.append(task)
+    return JSONResponse(content=task, status_code=201)
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: str, request: Request):
+    body = await request.json()
+    for task in tasks:
+        if task["id"] == task_id:
+            if "status" in body:
+                task["status"] = body["status"]
+            if "title" in body:
+                task["title"] = body["title"]
+            task["updated_at"] = time.time()
+            return JSONResponse(content=task)
+    return JSONResponse(content={"error": "Task not found"}, status_code=404)
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    global tasks
+    tasks = [t for t in tasks if t["id"] != task_id]
+    return JSONResponse(content={"ok": True})
 
 # --- SPA static files ---
 if os.path.isdir(os.path.join(DIST_DIR, "assets")):
