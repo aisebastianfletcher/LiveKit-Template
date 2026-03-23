@@ -14,7 +14,7 @@ app = FastAPI(title="LiveKit Voice Agent")
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "devkey")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
-OPENCLAW_API = os.environ.get("OPENCLAW_API", "https://openclaw-production-058c.up.railway.app")
+OPENCLAW_API = os.environ.get("OPENCLAW_API", "http://openclaw.railway.internal:18789")
 OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
@@ -46,7 +46,7 @@ async def create_token(request: Request):
 
 @app.post("/api/openclaw/chat")
 async def proxy_openclaw_chat(request: Request):
-    """Proxy text chat requests to OpenClaw API to avoid CORS issues."""
+    """Proxy text chat requests to OpenClaw Gateway to avoid CORS issues."""
     body = await request.json()
     body.setdefault("model", "openclaw:main")
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -59,7 +59,7 @@ async def proxy_openclaw_chat(request: Request):
             return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
             return JSONResponse(
-                content={"error": str(e)},
+                content={"error": f"Proxy error: {type(e).__name__}: {str(e)}"},
                 status_code=502,
             )
 
