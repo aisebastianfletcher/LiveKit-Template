@@ -1,7 +1,7 @@
 """Web frontend for LiveKit voice agent — serves React SPA + token API."""
-
 import os
 import uuid
+import json
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -35,14 +35,12 @@ async def create_token(request: Request):
         .with_grants(api.VideoGrants(room_join=True, room=room_name))
         .to_jwt()
     )
-
     return {
         "token": token,
         "url": LIVEKIT_URL,
         "room": room_name,
         "identity": identity,
     }
-
 
 @app.post("/api/openclaw/chat")
 async def proxy_openclaw_chat(request: Request):
@@ -56,7 +54,12 @@ async def proxy_openclaw_chat(request: Request):
                 json=body,
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}"},
             )
-            return JSONResponse(content=resp.json(), status_code=resp.status_code)
+            raw = resp.text
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = {"error": f"Non-JSON response (status {resp.status_code}): {raw[:500]}"}
+            return JSONResponse(content=data, status_code=resp.status_code)
         except Exception as e:
             return JSONResponse(
                 content={"error": f"Proxy error: {type(e).__name__}: {str(e)}"},
@@ -76,6 +79,5 @@ async def serve_spa(full_path: str):
 
 if __name__ == "__main__":
     import uvicorn
-
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
