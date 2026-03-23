@@ -49,7 +49,7 @@ async def proxy_openclaw_chat(request: Request):
     """Proxy text chat requests to OpenClaw Gateway to avoid CORS issues."""
     body = await request.json()
     body.setdefault("model", "openclaw:main")
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             resp = await client.post(
                 f"{OPENCLAW_API}/v1/chat/completions",
