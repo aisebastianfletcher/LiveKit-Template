@@ -3,11 +3,15 @@ import os
 import uuid
 import json
 import time
+import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from livekit import api
 import httpx
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="LiveKit Voice Agent")
 
@@ -20,6 +24,8 @@ OPENCLAW_BASE_URL = os.environ.get("OPENCLAW_BASE_URL", "https://openclaw-produc
 OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
+
+logger.info(f"OpenClaw base URL: {OPENCLAW_BASE_URL}")
 
 # In-memory stores
 tasks: list[dict] = []
@@ -55,6 +61,7 @@ async def proxy_openclaw_chat(request: Request):
     # Build the chat completions URL
     base = OPENCLAW_BASE_URL.rstrip("/")
     url = f"{base}/v1/chat/completions"
+    logger.info(f"Sending chat request to: {url}")
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
@@ -66,12 +73,25 @@ async def proxy_openclaw_chat(request: Request):
                     "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}",
                 },
             )
-            data = resp.json()
+            logger.info(f"OpenClaw response status: {resp.status_code}")
+            logger.info(f"OpenClaw response headers: {dict(resp.headers)}")
+            raw_text = resp.text
+            logger.info(f"OpenClaw response body (first 500 chars): {raw_text[:500]}")
+            
+            if not raw_text.strip():
+                return JSONResponse(content={"error": "Empty response from OpenClaw"}, status_code=502)
+            
+            try:
+                data = resp.json()
+            except Exception:
+                return JSONResponse(content={"error": f"Non-JSON response: {raw_text[:200]}"}, status_code=502)
+            
             if resp.status_code != 200:
                 return JSONResponse(content=data, status_code=resp.status_code)
             reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             return JSONResponse(content={"reply": reply})
         except Exception as e:
+            logger.error(f"OpenClaw chat error: {e}")
             return JSONResponse(content={"error": str(e)}, status_code=500)
 
 # --- Tasks API ---
