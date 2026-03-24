@@ -1,92 +1,159 @@
-/**
- * api.ts  –  Fix 4: Authenticated API helper
- *
- * Every component that calls /api/* should use `apiFetch` instead of
- * raw `fetch`.  It reads the token from sessionStorage and injects the
- * Authorization header automatically.
- *
- * Usage:
- *   import { apiFetch } from "../utils/api";
- *
- *   // GET
- *   const tasks = await apiFetch("/api/tasks").then(r => r.json());
- *
- *   // POST
- *   const result = await apiFetch("/api/openclaw/chat", {
- *     method: "POST",
- *     body: JSON.stringify({ messages }),
- *   }).then(r => r.json());
- */
+// ─── Base URL ─────────────────────────────────────────────────────────────────
+// In dev, Vite proxies /api → FastAPI (localhost:8000).
+// In production (Railway), the frontend is served by the same FastAPI process
+// so relative URLs work without a base.
 
-const STORAGE_KEY = "openclaw_access_token";
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
-function getToken(): string {
-  return sessionStorage.getItem(STORAGE_KEY) ?? "";
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getToken(): string | null {
+  return localStorage.getItem("openclaw_token");
 }
 
-/**
- * Authenticated fetch wrapper.
- * Behaves exactly like `fetch` but automatically adds the Bearer token header.
- */
-export async function apiFetch(
-  input: RequestInfo | URL,
-  init: RequestInit = {}
-): Promise<Response> {
-  const token = getToken();
-  const headers = new Headers(init.headers ?? {});
+// ─── Error type ───────────────────────────────────────────────────────────────
 
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-
-  // Always send JSON content-type for POST/PATCH/PUT if body is a string
-  if (
-    init.body &&
-    typeof init.body === "string" &&
-    !headers.has("Content-Type")
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly body?: unknown,
   ) {
-    headers.set("Content-Type", "application/json");
+    super(message);
+    this.name = "ApiError";
   }
-
-  return fetch(input, { ...init, headers });
 }
 
-// ── Typed convenience wrappers ────────────────────────────────────────────────
+// ─── Core fetch wrapper ───────────────────────────────────────────────────────
 
-export async function apiGet<T = unknown>(path: string): Promise<T> {
-  const res = await apiFetch(path);
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-export async function apiPost<T = unknown>(
+export async function apiFetch<T = unknown>(
   path: string,
-  body: unknown
+  options: RequestInit = {},
 ): Promise<T> {
-  const res = await apiFetch(path, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  const token = getToken();
+
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers ?? {}),
+  };
+
+  const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
+
+  const res = await fetch(url, { ...options, headers });
+
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`POST ${path} → ${res.status}: ${text}`);
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      body = await res.text().catch(() => null);
+    }
+    const message =
+      typeof body === "object" &&
+      body !== null &&
+      "detail" in body &&
+      typeof (body as Record<string, unknown>).detail === "string"
+        ? (body as Record<string, string>).detail
+        : `HTTP ${res.status} ${res.statusText}`;
+    throw new ApiError(res.status, message, body);
   }
+
+  // 204 No Content
+  if (res.status === 204) return undefined as T;
+
   return res.json() as Promise<T>;
 }
 
-export async function apiPatch<T = unknown>(
-  path: string,
-  body: unknown
-): Promise<T> {
-  const res = await apiFetch(path, {
-    method: "PATCH",
-    body: JSON.stringify(body),
+// ─── Convenience verbs ────────────────────────────────────────────────────────
+
+export const apiGet = <T = unknown>(path: string) =>
+  apiFetch<T>(path, { method: "GET" });
+
+export const apiPost = <T = unknown>(path: string, body: unknown) =>
+  apiFetch<T>(path, { method: "POST", body: JSON.stringify(body) });
+
+export const apiPut = <T = unknown>(path: string, body: unknown) =>
+  apiFetch<T>(path, { method: "PUT", body: JSON.stringify(body) });
+
+export const apiDelete = <T = unknown>(path: string) =>
+  apiFetch<T>(path, { method: "DELETE" });
+
+// ─── OpenClaw-specific API calls ──────────────────────────────────────────────
+
+// ── Text chat ─────────────────────────────────────────────────────────────────
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp?: string;
+}
+
+export interface ChatRequest {
+  message: string;
+  /** Optionally pass previous turns for context */
+  history?: ChatMessage[];
+}
+
+export interface ChatResponse {
+  response: string;
+  /** Updated conversation history returned by the backend */
+  history?: ChatMessage[];
+}
+
+export async function sendChatMessage(
+  message: string,
+  history: ChatMessage[] = [],
+): Promise<ChatResponse> {
+  return apiPost<ChatResponse>("/api/openclaw/chat", { message, history });
+}
+
+// ── Memory: conversations ─────────────────────────────────────────────────────
+
+export interface ConversationSummary {
+  id?: string;
+  date?: string;
+  summary: string;
+  /** Raw markdown block if the backend returns the full file */
+  raw?: string;
+}
+
+export interface ConversationsResponse {
+  conversations: ConversationSummary[];
+  /** Raw markdown of the full conversations.md file */
+  raw?: string;
+}
+
+export async function fetchConversations(): Promise<ConversationsResponse> {
+  return apiGet<ConversationsResponse>("/api/memory/conversations");
+}
+
+// ── Memory: profile & tasks (bonus – useful for other pages) ─────────────────
+
+export interface ProfileResponse {
+  content: string;
+}
+export const fetchProfile = () =>
+  apiGet<ProfileResponse>("/api/memory/profile");
+
+export interface TasksResponse {
+  content: string;
+}
+export const fetchTasks = () => apiGet<TasksResponse>("/api/memory/tasks");
+
+// ── LiveKit token ─────────────────────────────────────────────────────────────
+
+export interface LiveKitTokenResponse {
+  token: string;
+  url: string;
+}
+
+export async function fetchLiveKitToken(
+  roomName: string,
+  participantName: string,
+): Promise<LiveKitTokenResponse> {
+  return apiPost<LiveKitTokenResponse>("/api/livekit/token", {
+    room_name: roomName,
+    participant_name: participantName,
   });
-  if (!res.ok) throw new Error(`PATCH ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-export async function apiDelete(path: string): Promise<void> {
-  const res = await apiFetch(path, { method: "DELETE" });
-  if (!res.ok) throw new Error(`DELETE ${path} → ${res.status}`);
 }
