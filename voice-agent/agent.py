@@ -188,7 +188,7 @@ async def update_profile_from_facts(facts: dict) -> None:
     if not facts:
         return
 
-    name       = facts.get("name")
+    name        = facts.get("name")
     preferences = facts.get("preferences") or []
     key_facts   = facts.get("key_facts") or []
 
@@ -242,7 +242,6 @@ async def update_profile_from_facts(facts: dict) -> None:
         "*Last updated: Not yet - OpenClaw will update this file automatically.*",
         f"*Last updated: {now}*",
     )
-    # If that placeholder is already gone, update the existing timestamp line
     if f"*Last updated: {now}*" not in profile:
         import re
         profile = re.sub(
@@ -270,9 +269,7 @@ async def update_tasks_from_facts(facts: dict) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     new_entries = "\n".join(f"- [ ] {t} *(voice, {now})*" for t in new_tasks)
 
-    # Append to existing section or create it
     if "## AI-Extracted Tasks" in tasks_content:
-        # Insert after the section header
         tasks_content = tasks_content.replace(
             "## AI-Extracted Tasks\n",
             f"## AI-Extracted Tasks\n{new_entries}\n",
@@ -350,9 +347,9 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("disconnected")
     def on_disconnect():
-              asyncio.create_task(_handle_disconnect())
+        asyncio.create_task(_handle_disconnect())
 
-      async def _handle_disconnect():
+    async def _handle_disconnect():
         if not transcript_lines:
             return
 
@@ -399,7 +396,6 @@ async def entrypoint(ctx: JobContext):
         try:
             facts = await extract_facts_from_transcript(transcript)
             logger.info(f"[OPENCLAW] Extracted facts: {facts}")
-            # Run both writes concurrently to save time
             await asyncio.gather(
                 update_profile_from_facts(facts),
                 update_tasks_from_facts(facts),
