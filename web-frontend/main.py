@@ -414,6 +414,44 @@ async def create_agent(request: Request):
     return JSONResponse(content=agent, status_code=201)
 
 
+
+# -- Memory read routes (frontend api.ts) ----------------------------------------
+
+@app.get("/api/memory/conversations")
+async def get_memory_conversations():
+    content = await read_github_file("memory/conversations.md")
+    return {"content": content}
+
+
+@app.get("/api/memory/profile")
+async def get_memory_profile():
+    content = await read_github_file("memory/profile.md")
+    return {"content": content}
+
+
+@app.get("/api/memory/tasks")
+async def get_memory_tasks():
+    content = await read_github_file("memory/tasks.md")
+    return {"content": content}
+
+
+# -- LiveKit token alias (frontend calls /api/livekit/token) ---------------------
+
+@app.post("/api/livekit/token")
+async def livekit_token(request: Request):
+    body = await request.json()
+    room_name = body.get("room_name", f"test-room-{uuid.uuid4().hex[:8]}")
+    participant_name = body.get("participant_name", f"user-{uuid.uuid4().hex[:6]}")
+    token = (
+        api.AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
+        .with_identity(participant_name)
+        .with_name(participant_name)
+        .with_grants(api.VideoGrants(room_join=True, room=room_name))
+        .to_jwt()
+    )
+    return {"token": token, "url": LIVEKIT_URL}
+
+
 # ── SPA static files ──────────────────────────────────────────────────────────
 if os.path.isdir(os.path.join(DIST_DIR, "assets")):
     app.mount(
