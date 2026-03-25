@@ -8,4 +8,6 @@ dependencies = [
     "uvicorn[standard]",
     "livekit-api",
     "httpx",
+            "redis",
+        "pydantic",
 ]
