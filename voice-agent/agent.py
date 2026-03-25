@@ -4,6 +4,7 @@ Fixes applied:
   - Fix 5: After session ends, extract profile facts + new tasks from transcript
            and write them back to memory/profile.md and memory/tasks.md
 """
+# Trigger redeploy with async disconnect fix
 
 import logging
 import os
