@@ -549,9 +549,30 @@ async def autonomous_task_check():
     logger.info(f"[LOOP] {len(pending)} pending tasks found")
     status = {"checked_at": datetime.utcnow().isoformat(), "pending_count": len(pending), "pending": pending[:20]}
     await write_github_file("workspace/status/tasks_status.json", json.dumps(status, indent=2), "OpenClaw: task status check")
+    # Sync pending items into the in-memory _tasks list so the UI sees them
+    existing_titles = {t["title"].strip().lower() for t in _tasks}
+    for line in pending[:20]:
+        title = line.strip().lstrip("- [ ]").strip()
+        if not title or title.lower() in existing_titles:
+            continue
+        new_task = {
+            "id": uuid.uuid4().hex[:8],
+            "title": title,
+            "status": "pending",
+            "source": "autonomous",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+        }
+        _tasks.append(new_task)
+        existing_titles.add(title.lower())
+        logger.info(f"[LOOP] Surfaced task to UI: {title}")
 
 async def autonomous_reflect():
     logger.info("[LOOP] Running autonomous reflection")
+    # Create a visible task so the UI shows the agent is working
+    _reflect_task = {"id": uuid.uuid4().hex[:8], "title": f"Self-reflection ({datetime.utcnow().strftime('%H:%M UTC')})", "status": "in_progress", "source": "autonomous", "created_at": time.time(), "updated_at": time.time()}
+    _tasks.append(_reflect_task)
+    try:
     prompt = ("You are reviewing your own memory files. Identify: "
               "1) Any contradictions or outdated information. "
               "2) Patterns in the user's behaviour or preferences you should remember better. "
@@ -562,6 +583,12 @@ async def autonomous_reflect():
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     path = f"workspace/reflections/{datetime.utcnow().strftime('%Y%m%d')}.md"
     await write_github_file(path, f"# Reflection {now}\n\n{reflection}\n", f"OpenClaw: autonomous reflection {now}")
+        _reflect_task["status"] = "completed"
+        _reflect_task["updated_at"] = time.time()
+    except Exception as e:
+        _reflect_task["status"] = "failed"
+        _reflect_task["updated_at"] = time.time()
+        logger.error(f"[LOOP] Reflection failed: {e}")
 
 async def autonomous_reorganise():
     logger.info("[LOOP] Running daily knowledge reorganisation")
