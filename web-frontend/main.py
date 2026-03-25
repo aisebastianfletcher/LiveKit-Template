@@ -298,11 +298,11 @@ async def proxy_openclaw_chat(request: Request):
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             resp = await client.post(
-                f"{OPENCLAW_API_BASE}/chat/completions",
-                json={"model": "openclaw", "messages": full_messages},
+                                    "https://openrouter.ai/api/v1/chat/completions",
+                                    json={"model": os.environ.get("OPENROUTER_MODEL", "google/gemini-flash-1.5"), "messages": full_messages},
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}",
+                                            "Authorization": f"Bearer {os.environ.get('OPENROUTER_API_KEY', '')}",
                 },
             )
             raw_text = resp.text
