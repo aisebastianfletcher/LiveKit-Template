@@ -573,16 +573,16 @@ async def autonomous_reflect():
     _reflect_task = {"id": uuid.uuid4().hex[:8], "title": f"Self-reflection ({datetime.utcnow().strftime('%H:%M UTC')})", "status": "in_progress", "source": "autonomous", "created_at": time.time(), "updated_at": time.time()}
     _tasks.append(_reflect_task)
     try:
-    prompt = ("You are reviewing your own memory files. Identify: "
+        prompt = ("You are reviewing your own memory files. Identify: "
               "1) Any contradictions or outdated information. "
               "2) Patterns in the user's behaviour or preferences you should remember better. "
               "3) Any tools or capabilities you wish you had. "
               "4) One concrete improvement you could make to your own prompts or knowledge structure. "
               "Write a short reflection (max 300 words) in markdown.")
-    reflection = await call_openclaw_llm(prompt, system="You are OpenClaw performing self-reflection.")
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    path = f"workspace/reflections/{datetime.utcnow().strftime('%Y%m%d')}.md"
-    await write_github_file(path, f"# Reflection {now}\n\n{reflection}\n", f"OpenClaw: autonomous reflection {now}")
+        reflection = await call_openclaw_llm(prompt, system="You are OpenClaw performing self-reflection.")
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        path = f"workspace/reflections/{datetime.utcnow().strftime('%Y%m%d')}.md"
+        await write_github_file(path, f"# Reflection {now}\n\n{reflection}\n", f"OpenClaw: autonomous reflection {now}")
         _reflect_task["status"] = "completed"
         _reflect_task["updated_at"] = time.time()
     except Exception as e:
