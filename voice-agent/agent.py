@@ -348,7 +348,10 @@ async def entrypoint(ctx: JobContext):
     )
 
     @ctx.room.on("disconnected")
-    async def on_disconnect():
+    def on_disconnect():
+              asyncio.create_task(_handle_disconnect())
+
+      async def _handle_disconnect():
         if not transcript_lines:
             return
 
