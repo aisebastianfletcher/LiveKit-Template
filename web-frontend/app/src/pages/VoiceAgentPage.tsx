@@ -433,12 +433,12 @@ const OpenClawNode = memo(({ data }: NodeProps) => {
         <span style={{ ...bdg, borderColor: online ? '#d97706' : '#3f3f46', color: online ? '#fbbf24' : '#52525b' }}>
           {online ? '● online' : '○ offline'}
         </span>
-        {data.model && (
+        {Boolean(data.model) && (
           <span style={{ ...bdg, borderColor: '#374151', color: '#6b7280', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {data.model as string}
           </span>
         )}
-        {data.gateway && (
+        {Boolean(data.gateway) && (
           <span style={{ ...bdg, borderColor: '#1d4ed8', color: '#60a5fa' }}>gateway</span>
         )}
       </div>
