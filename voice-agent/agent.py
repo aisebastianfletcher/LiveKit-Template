@@ -61,7 +61,7 @@ QUEUE_FILE            = "workspace/pending_queue.json"
 
 # ── Shared prompt ──────────────────────────────────────────────────────────────
 
-BASE_INSTRUCTIONS = """You are OpenClaw, a stateful voice AI assistant with persistent memory.
+BASE_INSTRUCTIONS = """You are Katy, a stateful voice AI assistant with persistent memory.
 Keep responses short (1-2 sentences) unless asked for detail.
 You remember everything across sessions because your memory is stored in files.
 When the user tells you something important (name, preferences, tasks, etc), acknowledge you will remember it.
@@ -550,7 +550,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # LLM is routed exclusively through the OpenClaw gateway.
     session = AgentSession(
         stt=openai.STT(model="whisper-1"),
-        tts=openai.TTS(model="tts-1", voice="onyx"),
+        tts=openai.TTS(model="tts-1", voice="nova"),
         vad=ctx.proc.userdata["vad"],
         llm=make_resilient_llm(),
     )
