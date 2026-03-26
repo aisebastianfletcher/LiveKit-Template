@@ -313,10 +313,8 @@ async def entrypoint(ctx: JobContext):
         tts=openai.TTS(model="tts-1", voice="onyx"),
         vad=ctx.proc.userdata["vad"],
         llm=openai.LLM(
-            model="openclaw",
+                        model="gpt-4o-mini",
             temperature=0.7,
-            base_url=OPENCLAW_API_BASE,
-            api_key=OPENCLAW_GATEWAY_TOKEN,
         ),
     )
 
