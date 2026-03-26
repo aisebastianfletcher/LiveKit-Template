@@ -789,7 +789,7 @@ export default function VoiceAgentPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={css.appTitle}>GITWIX Agent</div>
-              <div style={css.appSub}>steve · orchestrator</div>
+              <div style={css.appSub}>katy · orchestrator</div>
             </div>
             <Dot
               color={(openClawStatus?.status === 'online') ? '#d97706' : '#52525b'}
@@ -802,7 +802,7 @@ export default function VoiceAgentPage() {
           {/* Voice section */}
           <div style={css.section}>
             <SectionLabel>VOICE · LIVEKIT</SectionLabel>
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '2px 0' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '2px 0', height: 140 }}>
               {/* AuraVisualizer: auraMode + rmsRef (no style prop) */}
               <AuraVisualizer
                 auraMode={auraMode}
@@ -830,7 +830,7 @@ export default function VoiceAgentPage() {
             <div style={css.chatScroll}>
               {messages.length === 0 && (
                 <div style={{ fontSize: 10, color: '#30363d', textAlign: 'center', marginTop: 14, fontStyle: 'italic' }}>
-                  Send a message to Steve…
+                  Send a message to Katy…
                 </div>
               )}
               {messages.map((m, i) => (
