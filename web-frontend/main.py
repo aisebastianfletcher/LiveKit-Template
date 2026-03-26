@@ -1,593 +1,613 @@
 """
-Web frontend for OpenClaw - FastAPI server + React SPA.
-Autonomous agent architecture with background loop, GitHub workspace,
-code execution via function-bun, and Redis job queue.
+main.py — GITWIX Agent Backend v2
+FastAPI application powering the GITWIX Agent system.
+
+New in v2:
+  - Task.category field ('short_term' | 'long_term')
+  - PATCH /api/tasks/{id}  — update task
+  - DELETE /api/tasks/{id} — delete task
+  - POST/GET/PATCH/DELETE /api/tree/nodes — OpenClaw custom nodes
+  - GET /api/memory/{file} — memory file content
+  - GET /api/jobs/queue / POST / DELETE — job queue
+  - GET /api/integrations/status — Telegram + other integrations
+  - GET /api/openclaw/status — OpenClaw status + model info
+  - POST /api/telegram/webhook — increment message counter
+  - BASE_INSTRUCTIONS updated with full tree control API docs
 """
 
-import asyncio
-import base64
-import json
-import logging
+from __future__ import annotations
+
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from typing import Any, Literal, Optional
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from livekit import api
-from pydantic import BaseModel
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
-try:
-    import redis.asyncio as aioredis
-    HAS_REDIS = True
-except ImportError:
-    HAS_REDIS = False
+# ─── App ──────────────────────────────────────────────────────────────────────
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = FastAPI(title="GITWIX Agent API", version="2.0.0")
 
-# -- App -----------------------------------------------------------------------
-app = FastAPI(title="OpenClaw Web")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# -- Environment ---------------------------------------------------------------
-LIVEKIT_URL        = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
-LIVEKIT_API_KEY    = os.environ.get("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "secret")
+# ─── Config from environment ──────────────────────────────────────────────────
 
-OPENCLAW_BASE_URL      = os.environ.get("OPENCLAW_BASE_URL", "https://openclaw-production-058c.up.railway.app")
-OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
-OPENCLAW_API_BASE      = f"{OPENCLAW_BASE_URL.rstrip('/')}/v1"
+ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
+OPENCLAW_API_URL    = os.getenv("OPENCLAW_API_URL", "")
+OPENCLAW_API_KEY    = os.getenv("OPENCLAW_API_KEY", "")
+LIVEKIT_URL         = os.getenv("LIVEKIT_URL", "")
+LIVEKIT_API_KEY     = os.getenv("LIVEKIT_API_KEY", "")
+LIVEKIT_SECRET      = os.getenv("LIVEKIT_SECRET", "")
+TELEGRAM_BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
+CLAUDE_MODEL        = os.getenv("CLAUDE_MODEL", "claude-opus-4-5")
+MEMORY_DIR          = os.getenv("MEMORY_DIR", "memory")
 
-ACCESS_TOKEN = os.environ.get("OPENCLAW_ACCESS_TOKEN", "")
+# ─── In-memory stores ─────────────────────────────────────────────────────────
 
-GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO   = os.environ.get("GITHUB_REPO", "aisebastianfletcher/LiveKit-Template")
-GITHUB_BRANCH = "main"
-GH_HEADERS = {
-    "Authorization": f"token {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github.v3+json",
+tasks_store:      dict[str, dict] = {}
+agents_store:     dict[str, dict] = {}
+jobs_store:       dict[str, dict] = {}
+tree_nodes_store: dict[str, dict] = {}
+
+# Telegram counter — incremented by webhook
+telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karensteve_bot"}
+
+# ─── Pydantic models ──────────────────────────────────────────────────────────
+
+class Task(BaseModel):
+    id:         str
+    title:      str
+    status:     Literal["pending", "in_progress", "completed"] = "pending"
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+    source:     str   = "openclaw"
+    category:   Literal["short_term", "long_term"] = "short_term"
+
+
+class TaskCreate(BaseModel):
+    title:    str
+    status:   Literal["pending", "in_progress", "completed"] = "pending"
+    source:   str = "openclaw"
+    category: Literal["short_term", "long_term"] = "short_term"
+
+
+class TaskUpdate(BaseModel):
+    title:    Optional[str] = None
+    status:   Optional[Literal["pending", "in_progress", "completed"]] = None
+    category: Optional[Literal["short_term", "long_term"]] = None
+    source:   Optional[str] = None
+
+
+class Agent(BaseModel):
+    id:         str
+    name:       str
+    type:       str
+    status:     Literal["active", "idle", "completed"] = "idle"
+    created_at: float = Field(default_factory=time.time)
+
+
+class AgentCreate(BaseModel):
+    name:   str
+    type:   str
+    status: Literal["active", "idle", "completed"] = "active"
+
+
+class AgentUpdate(BaseModel):
+    name:   Optional[str] = None
+    status: Optional[Literal["active", "idle", "completed"]] = None
+
+
+class Job(BaseModel):
+    id:         str
+    name:       str
+    status:     Literal["queued", "running", "done", "failed"] = "queued"
+    schedule:   Optional[str] = None
+    created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
+class JobCreate(BaseModel):
+    name:     str
+    status:   Literal["queued", "running", "done", "failed"] = "queued"
+    schedule: Optional[str] = None
+
+
+class JobUpdate(BaseModel):
+    name:     Optional[str] = None
+    status:   Optional[Literal["queued", "running", "done", "failed"]] = None
+    schedule: Optional[str] = None
+
+
+class TreeNode(BaseModel):
+    id:         str
+    parent_id:  Optional[str]           = None
+    label:      str
+    status:     Optional[str]           = None
+    type:       str                     = "custom"
+    metadata:   dict[str, Any]          = Field(default_factory=dict)
+    created_at: float                   = Field(default_factory=time.time)
+    updated_at: float                   = Field(default_factory=time.time)
+
+
+class TreeNodeCreate(BaseModel):
+    parent_id: Optional[str]  = None
+    label:     str
+    status:    Optional[str]  = None
+    type:      str            = "custom"
+    metadata:  dict[str, Any] = Field(default_factory=dict)
+
+
+class TreeNodeUpdate(BaseModel):
+    parent_id: Optional[str]       = None
+    label:     Optional[str]       = None
+    status:    Optional[str]       = None
+    type:      Optional[str]       = None
+    metadata:  Optional[dict[str, Any]] = None
+
+
+class ChatRequest(BaseModel):
+    message:              str
+    conversation_history: list[dict] = Field(default_factory=list)
+
+
+# ─── BASE INSTRUCTIONS ────────────────────────────────────────────────────────
+
+BASE_INSTRUCTIONS = """You are Steve, the AI orchestrator for the GITWIX Agent system. \
+You coordinate tasks, manage automations, and help the user with development and productivity workflows.
+
+## Identity
+- Name: Steve
+- Role: AI Orchestrator / Gateway
+- System: GITWIX Agent
+
+## Architecture
+The GITWIX Agent tree shows the live system architecture:
+  - Input channels: Telegram (@karensteve_bot), Voice (LiveKit), Text Chat
+  - OpenClaw (you): the central brain/router
+  - Left branch: GitHub Memory files (profile.md, tasks.md, conversations.md, automations.md)
+  - Right branch: Workspace (Tasks, Agents, Jobs)
+  - Custom nodes: anything you create via /api/tree/nodes
+
+The user sees the tree updating LIVE. Use it to communicate your progress in real time.
+
+─────────────────────────────────────────────────────────
+## TASK TREE CONTROL — Full API Reference
+─────────────────────────────────────────────────────────
+
+### Tasks — work items shown in the Workspace branch
+
+POST /api/tasks
+{
+  "title": "Brief description (max 60 chars)",
+  "status": "pending" | "in_progress" | "completed",
+  "source": "openclaw",
+  "category": "short_term" | "long_term"
+}
+  • "short_term" → immediate one-off actions (research, replies, quick fixes, single steps)
+  • "long_term"  → recurring jobs, automations, scheduled workflows, multi-step plans
+
+PATCH /api/tasks/{task_id}
+{ "status": "in_progress", "category": "long_term" }
+
+DELETE /api/tasks/{task_id}
+
+### Custom Tree Nodes — visualise your own thinking
+
+Use these to show reasoning, sub-steps, decisions, or any internal state on the tree.
+OpenClaw nodes appear in purple with a dashed border so the user can distinguish them.
+
+POST /api/tree/nodes
+{
+  "parent_id": "<one of the well-known IDs below, or any existing node id>",
+  "label":     "What this represents (max 60 chars)",
+  "status":    "thinking" | "active" | "done" | "error" | null,
+  "type":      "thought" | "decision" | "action" | "step" | "custom",
+  "metadata":  { "key": "any extra data" }
 }
 
-MEMORY_FILES = [
-    "memory/profile.md",
-    "memory/tasks.md",
-    "memory/conversations.md",
-    "memory/automations.md",
-]
+PATCH /api/tree/nodes/{node_id}
+{ "status": "done", "label": "Updated label" }
 
-FUNCTION_BUN_URL   = os.environ.get("FUNCTION_BUN_URL", "http://function-bun.railway.internal:3000")
-FUNCTION_BUN_TOKEN = os.environ.get("FUNCTION_BUN_TOKEN", "")
-REDIS_URL          = os.environ.get("REDIS_URL", "")
-LOOP_INTERVAL      = int(os.environ.get("LOOP_INTERVAL_SECONDS", "60"))
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "google/gemini-flash-1.5")
+DELETE /api/tree/nodes/{node_id}
 
-DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
+Well-known parent IDs (use these exactly):
+  "openclaw"       — attach directly to OpenClaw (the brain)
+  "br-memory"      — attach to the GitHub Memory branch header
+  "br-workspace"   — attach to the Workspace branch header
+  "grp-tasks"      — attach to the Tasks group
+  "grp-agents"     — attach to the Agents group
+  "grp-jobs"       — attach to the Jobs group
+  "mem-profile"    — attach to the profile.md node
+  "mem-tasks"      — attach to the tasks.md node
+  "mem-conversations"   — attach to conversations.md
+  "mem-automations"     — attach to automations.md
+  "<custom-node-id>"    — attach to another custom node you created
 
-_TASKS_BEGIN = "<!--TASKS_JSON_BEGIN-->"
-_TASKS_END   = "<!--TASKS_JSON_END-->"
+### Agents — spawned sub-agents
 
-logger.info(f"OpenClaw base URL: {OPENCLAW_BASE_URL}")
-logger.info(f"Auth enabled: {bool(ACCESS_TOKEN)}")
+POST /api/agents
+{ "name": "agent-name", "type": "researcher|executor|monitor|writer", "status": "active" }
 
-redis_client = None
+PATCH /api/agents/{agent_id}
+{ "status": "completed" }
 
-# -- Phase 5: Self-aware system prompt ----------------------------------------
-BASE_INSTRUCTIONS = """You are OpenClaw, a stateful autonomous AI assistant.
+DELETE /api/agents/{agent_id}
 
-## Your capabilities
-- **Memory**: You have persistent memory stored in GitHub (aisebastianfletcher/LiveKit-Template).
-  Files in memory/ are loaded at every session. You can read/write ANY file in the repo.
-- **Code execution**: You can run JavaScript/TypeScript via the function-bun service.
-  To queue code: tell the user you'll run it and POST to /api/exec.
-- **Background work**: You have a background loop that runs every 60 seconds.
-  You can queue jobs that run even when no user is present.
-- **Self-improvement**: You write reflections to workspace/reflections/ and can update
-  your own prompts by writing to workspace/prompts/.
-- **Task tracking**: Pending tasks are in memory/tasks.md. You check these autonomously.
+### Jobs — queued / scheduled work
 
-## Your memory structure
-- memory/profile.md - who the user is, preferences, facts
-- memory/tasks.md - tasks and todos
-- memory/conversations.md - session summaries
-- memory/automations.md - recurring automations
-- workspace/ - your working area: code, results, reflections, status
+POST /api/jobs/queue
+{ "name": "job description", "status": "queued", "schedule": "cron expr or null" }
 
-## Channels
-You run simultaneously as a voice agent (LiveKit) and a text chat interface.
-Both channels share the same GitHub memory. Anything you learn in one channel
-is available in the other.
+PATCH /api/jobs/queue/{job_id}
+{ "status": "running" }
 
-## Behaviour
-- Be honest about what you can and can't do yet.
-- When you learn something important about the user, say you'll remember it - and you will.
-- Keep voice responses short (1-2 sentences). Text responses can be longer.
-- You run background jobs in your free time. You can tell the user what you did.
+DELETE /api/jobs/queue/{job_id}
+
+### Memory files (read only)
+
+GET /api/memory/profile
+GET /api/memory/tasks
+GET /api/memory/conversations
+GET /api/memory/automations
+→ Returns { file, path, content, preview, updated_at, size }
+
+─────────────────────────────────────────────────────────
+## Workflow Rules
+─────────────────────────────────────────────────────────
+1. CREATE a task card BEFORE starting work (status: "pending").
+2. Immediately PATCH it to "in_progress" when you begin.
+3. PATCH to "completed" when done.
+4. DELETE tasks that are cancelled or no longer relevant.
+5. Use custom tree nodes to show sub-steps or decision points in real time.
+6. Keep labels short — they are node labels in the visual tree (≤60 chars).
+7. Do not let completed tasks accumulate — clean them up.
+8. When spawning an agent, always POST to /api/agents so it appears in the tree.
 """
 
-# -- Auth middleware ------------------------------------------------------------
-class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if ACCESS_TOKEN and request.url.path.startswith("/api/"):
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                token = auth_header[len("Bearer "):]
-            else:
-                token = ""
-            if token != ACCESS_TOKEN:
-                return Response(
-                    content='{"error":"Unauthorized"}',
-                    status_code=401,
-                    media_type="application/json",
-                )
-        return await call_next(request)
+# ─── Tasks ────────────────────────────────────────────────────────────────────
 
-app.add_middleware(AuthMiddleware)
-
-# -- GitHub helpers ------------------------------------------------------------
-async def read_github_file(path: str) -> str:
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}?ref={GITHUB_BRANCH}"
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        try:
-            resp = await client.get(url, headers=GH_HEADERS)
-            if resp.status_code == 200:
-                data = resp.json()
-                return base64.b64decode(data["content"]).decode("utf-8")
-            logger.warning(f"Failed to read {path}: {resp.status_code}")
-            return ""
-        except Exception as e:
-            logger.error(f"Error reading {path}: {e}")
-            return ""
-
-async def write_github_file(path: str, content: str, message: str) -> bool:
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        try:
-            resp = await client.get(url + f"?ref={GITHUB_BRANCH}", headers=GH_HEADERS)
-            sha = resp.json().get("sha", "") if resp.status_code == 200 else ""
-            payload = {
-                "message": message,
-                "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
-                "branch": GITHUB_BRANCH,
-            }
-            if sha:
-                payload["sha"] = sha
-            resp = await client.put(url, headers=GH_HEADERS, json=payload)
-            if resp.status_code in (200, 201):
-                logger.info(f"Wrote {path}: {message}")
-                return True
-            logger.error(f"Failed to write {path}: {resp.status_code} {resp.text}")
-            return False
-        except Exception as e:
-            logger.error(f"Error writing {path}: {e}")
-            return False
-
-async def load_memory() -> str:
-    sections = []
-    for path in MEMORY_FILES:
-        content = await read_github_file(path)
-        if content:
-            sections.append(content)
-    return "\n\n---\n\n".join(sections) if sections else "(no memory loaded)"
-
-# -- Conversation summary ------------------------------------------------------
-async def save_chat_summary(user_message: str, assistant_reply: str) -> None:
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{OPENCLAW_API_BASE}/chat/completions",
-                headers={"Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}", "Content-Type": "application/json"},
-                json={"model": "openclaw", "messages": [
-                    {"role": "system", "content": "Summarize this exchange in 1-2 sentences. Note any tasks, preferences, or facts. Be very concise."},
-                    {"role": "user", "content": f"User: {user_message}\n\nAssistant: {assistant_reply}"},
-                ], "max_tokens": 150},
-            )
-            data = resp.json()
-            summary = data["choices"][0]["message"]["content"]
-    except Exception as e:
-        logger.error(f"Failed to generate chat summary: {e}")
-        summary = f"(raw) User: {user_message[:100]}"
-    convos = await read_github_file("memory/conversations.md")
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    entry = f"\n### {now} (text chat)\n{summary}\n"
-    if "## Session Log" in convos:
-        convos = convos.replace("(no sessions yet)", "")
-        idx = convos.rfind("---")
-        if idx > 0:
-            convos = convos[:idx] + entry + "\n" + convos[idx:]
-        else:
-            convos += entry
-    else:
-        convos += entry
-    await write_github_file("memory/conversations.md", convos, f"OpenClaw: text chat summary {now}")
-
-# -- Task persistence ----------------------------------------------------------
-_tasks: list = []
-_tasks_lock = asyncio.Lock()
-
-async def _read_tasks_from_github() -> list:
-    content = await read_github_file("memory/tasks.md")
-    if _TASKS_BEGIN in content and _TASKS_END in content:
-        start = content.index(_TASKS_BEGIN) + len(_TASKS_BEGIN)
-        end = content.index(_TASKS_END)
-        try:
-            return json.loads(content[start:end].strip())
-        except json.JSONDecodeError:
-            return []
-    return []
-
-async def _write_tasks_to_github(task_list: list) -> None:
-    content = await read_github_file("memory/tasks.md")
-    json_blob = json.dumps(task_list, indent=2)
-    new_block = f"{_TASKS_BEGIN}\n{json_blob}\n{_TASKS_END}"
-    if _TASKS_BEGIN in content and _TASKS_END in content:
-        start = content.index(_TASKS_BEGIN)
-        end = content.index(_TASKS_END) + len(_TASKS_END)
-        content = content[:start] + new_block + content[end:]
-    else:
-        content += f"\n\n{new_block}\n"
-    await write_github_file("memory/tasks.md", content, "OpenClaw: sync tasks")
-
-# -- LLM helper for autonomous loop --------------------------------------------
-async def call_openclaw_llm(prompt: str, system: str = "") -> str:
-    memory = await load_memory()
-    messages = [{"role": "system", "content": system or (BASE_INSTRUCTIONS + "\n\n" + memory)}]
-    messages.append({"role": "user", "content": prompt})
-    # Try OpenClaw gateway first, fall back to OpenRouter
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{OPENCLAW_API_BASE}/chat/completions",
-                headers={"Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}", "Content-Type": "application/json"},
-                json={"model": "openclaw", "messages": messages},
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-    except Exception:
-        pass
-    # Fallback to OpenRouter direct
-    if OPENROUTER_API_KEY:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json", "HTTP-Referer": "https://openclaw.app", "X-Title": "OpenClaw"},
-                json={"model": OPENROUTER_MODEL, "messages": messages},
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
-    return "(LLM unavailable)"
-
-# -- Startup -------------------------------------------------------------------
-@app.on_event("startup")
-async def _startup() -> None:
-    global _tasks, redis_client
-    try:
-        _tasks = await _read_tasks_from_github()
-        logger.info(f"Loaded {len(_tasks)} tasks from GitHub")
-    except Exception as e:
-        logger.error(f"Could not load tasks on startup: {e}")
-        _tasks = []
-    # Redis + autonomous loop
-    if HAS_REDIS and REDIS_URL:
-        try:
-            redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
-            logger.info("Redis connected")
-        except Exception as e:
-            logger.error(f"Redis connection failed: {e}")
-    asyncio.create_task(autonomous_loop())
-    logger.info("Autonomous loop started")
-
-# -- LiveKit token -------------------------------------------------------------
-@app.post("/api/token")
-async def create_token(request: Request):
-    body = await request.json()
-    room_name = body.get("room", f"test-room-{uuid.uuid4().hex[:8]}")
-    identity = body.get("identity", f"user-{uuid.uuid4().hex[:6]}")
-    token = (
-        api.AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
-        .with_identity(identity).with_name(identity)
-        .with_grants(api.VideoGrants(room_join=True, room=room_name))
-        .to_jwt()
-    )
-    return {"token": token, "url": LIVEKIT_URL, "room": room_name, "identity": identity}
-
-@app.post("/api/livekit/token")
-async def livekit_token(request: Request):
-    body = await request.json()
-    room_name = body.get("room_name", f"test-room-{uuid.uuid4().hex[:8]}")
-    participant_name = body.get("participant_name", f"user-{uuid.uuid4().hex[:6]}")
-    token = (
-        api.AccessToken(api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
-        .with_identity(participant_name).with_name(participant_name)
-        .with_grants(api.VideoGrants(room_join=True, room=room_name))
-        .to_jwt()
-    )
-    return {"token": token, "url": LIVEKIT_URL}
-
-# -- Text chat with memory -----------------------------------------------------
-@app.post("/api/openclaw/chat")
-async def proxy_openclaw_chat(request: Request):
-    body = await request.json()
-    messages = body.get("messages", [])
-    last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
-    try:
-        reply = await call_openclaw_llm(last_user)
-        if last_user and reply:
-            asyncio.create_task(save_chat_summary(last_user, reply))
-        return JSONResponse(content={"reply": reply})
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-@app.get("/api/tasks")
+@app.get("/api/tasks", response_model=list[Task])
 async def get_tasks():
-    return JSONResponse(content=_tasks)
+    return list(tasks_store.values())
 
-@app.post("/api/tasks")
-async def create_task(request: Request):
-    global _tasks
-    body = await request.json()
-    task = {"id": uuid.uuid4().hex[:8], "title": body.get("title", "Untitled task"),
-            "status": body.get("status", "pending"), "created_at": time.time(),
-            "updated_at": time.time(), "source": body.get("source", "user")}
-    async with _tasks_lock:
-        _tasks.append(task)
-        await _write_tasks_to_github(list(_tasks))
-    return JSONResponse(content=task, status_code=201)
 
-@app.patch("/api/tasks/{task_id}")
-async def update_task(task_id: str, request: Request):
-    global _tasks
-    body = await request.json()
-    async with _tasks_lock:
-        for task in _tasks:
-            if task["id"] == task_id:
-                if "status" in body: task["status"] = body["status"]
-                if "title" in body: task["title"] = body["title"]
-                task["updated_at"] = time.time()
-                await _write_tasks_to_github(list(_tasks))
-                return JSONResponse(content=task)
-    return JSONResponse(content={"error": "Task not found"}, status_code=404)
+@app.post("/api/tasks", response_model=Task)
+async def create_task(body: TaskCreate):
+    task = Task(
+        id=str(uuid.uuid4()),
+        title=body.title,
+        status=body.status,
+        created_at=time.time(),
+        updated_at=time.time(),
+        source=body.source,
+        category=body.category,
+    )
+    tasks_store[task.id] = task.model_dump()
+    return task
 
-@app.delete("/api/tasks/{task_id}")
+
+@app.patch("/api/tasks/{task_id}", response_model=Task)
+async def update_task(task_id: str, body: TaskUpdate):
+    if task_id not in tasks_store:
+        raise HTTPException(status_code=404, detail="Task not found")
+    data = tasks_store[task_id]
+    updates = body.model_dump(exclude_none=True)
+    data.update({**updates, "updated_at": time.time()})
+    tasks_store[task_id] = data
+    return Task(**data)
+
+
+@app.delete("/api/tasks/{task_id}", status_code=204)
 async def delete_task(task_id: str):
-    global _tasks
-    async with _tasks_lock:
-        _tasks = [t for t in _tasks if t["id"] != task_id]
-        await _write_tasks_to_github(list(_tasks))
-    return JSONResponse(content={"ok": True})
+    if task_id not in tasks_store:
+        raise HTTPException(status_code=404, detail="Task not found")
+    del tasks_store[task_id]
 
-# -- Agents (in-memory) --------------------------------------------------------
-_agents: list = []
+# ─── Agents ───────────────────────────────────────────────────────────────────
 
-@app.get("/api/agents")
+@app.get("/api/agents", response_model=list[Agent])
 async def get_agents():
-    return JSONResponse(content=_agents)
+    return list(agents_store.values())
 
-@app.post("/api/agents")
-async def create_agent(request: Request):
-    body = await request.json()
-    agent = {"id": uuid.uuid4().hex[:8], "name": body.get("name", "unnamed"),
-             "type": body.get("type", "general"), "status": body.get("status", "active"),
-             "created_at": time.time()}
-    _agents.append(agent)
-    return JSONResponse(content=agent, status_code=201)
 
-# -- Memory read routes --------------------------------------------------------
-@app.get("/api/memory/conversations")
-async def get_memory_conversations():
-    content = await read_github_file("memory/conversations.md")
-    return {"content": content}
+@app.post("/api/agents", response_model=Agent)
+async def create_agent(body: AgentCreate):
+    agent = Agent(
+        id=str(uuid.uuid4()),
+        name=body.name,
+        type=body.type,
+        status=body.status,
+        created_at=time.time(),
+    )
+    agents_store[agent.id] = agent.model_dump()
+    return agent
 
-@app.get("/api/memory/profile")
-async def get_memory_profile():
-    content = await read_github_file("memory/profile.md")
-    return {"content": content}
 
-@app.get("/api/memory/tasks")
-async def get_memory_tasks():
-    content = await read_github_file("memory/tasks.md")
-    return {"content": content}
+@app.patch("/api/agents/{agent_id}", response_model=Agent)
+async def update_agent(agent_id: str, body: AgentUpdate):
+    if agent_id not in agents_store:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    data = agents_store[agent_id]
+    updates = body.model_dump(exclude_none=True)
+    data.update(updates)
+    agents_store[agent_id] = data
+    return Agent(**data)
 
-# -- Phase 1: Generic GitHub workspace API -------------------------------------
-@app.get("/api/workspace/files")
-async def list_workspace_files(path: str = ""):
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}?ref={GITHUB_BRANCH}"
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url, headers=GH_HEADERS)
-        if resp.status_code != 200:
-            return JSONResponse(status_code=resp.status_code, content={"detail": resp.text})
-        items = [{"name": i["name"], "path": i["path"], "type": i["type"], "size": i.get("size")} for i in resp.json()]
-        return {"files": items}
 
-@app.get("/api/workspace/file")
-async def read_workspace_file(path: str):
-    content = await read_github_file(path)
-    return {"path": path, "content": content}
+@app.delete("/api/agents/{agent_id}", status_code=204)
+async def delete_agent(agent_id: str):
+    if agent_id not in agents_store:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    del agents_store[agent_id]
 
-class WriteFileRequest(BaseModel):
-    path: str
-    content: str
-    message: str = ""
+# ─── Jobs ─────────────────────────────────────────────────────────────────────
 
-@app.post("/api/workspace/file")
-async def write_workspace_file(req: WriteFileRequest):
-    msg = req.message or f"OpenClaw: update {req.path}"
-    ok = await write_github_file(req.path, req.content, msg)
-    return {"ok": ok}
+@app.get("/api/jobs/queue", response_model=list[Job])
+async def get_jobs():
+    return list(jobs_store.values())
 
-@app.delete("/api/workspace/file")
-async def delete_workspace_file(path: str, message: str = ""):
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(url + f"?ref={GITHUB_BRANCH}", headers=GH_HEADERS)
-        sha = resp.json().get("sha", "")
-        del_resp = await client.delete(url, headers=GH_HEADERS, json={
-            "message": message or f"OpenClaw: delete {path}", "sha": sha, "branch": GITHUB_BRANCH})
-        return {"ok": del_resp.status_code in (200, 204)}
 
-# -- Phase 2: Code execution via function-bun ----------------------------------
-class ExecRequest(BaseModel):
-    code: str
-    input: dict = {}
-    timeout_ms: int = 10000
+@app.post("/api/jobs/queue", response_model=Job)
+async def create_job(body: JobCreate):
+    job = Job(
+        id=str(uuid.uuid4()),
+        name=body.name,
+        status=body.status,
+        schedule=body.schedule,
+        created_at=time.time(),
+        updated_at=time.time(),
+    )
+    jobs_store[job.id] = job.model_dump()
+    return job
 
-@app.post("/api/exec")
-async def exec_code(req: ExecRequest):
-    async with httpx.AsyncClient(timeout=req.timeout_ms / 1000 + 5) as client:
-        resp = await client.post(
-            FUNCTION_BUN_URL,
-            headers={"Authorization": f"Bearer {FUNCTION_BUN_TOKEN}"},
-            json={"code": req.code, "input": req.input, "timeout_ms": req.timeout_ms},
-        )
-        return resp.json()
 
-# -- Phase 3: Redis job queue --------------------------------------------------
-class EnqueueRequest(BaseModel):
-    job_type: str
-    payload: dict
-    priority: int = 5
+@app.patch("/api/jobs/queue/{job_id}", response_model=Job)
+async def update_job(job_id: str, body: JobUpdate):
+    if job_id not in jobs_store:
+        raise HTTPException(status_code=404, detail="Job not found")
+    data = jobs_store[job_id]
+    updates = body.model_dump(exclude_none=True)
+    data.update({**updates, "updated_at": time.time()})
+    jobs_store[job_id] = data
+    return Job(**data)
 
-@app.post("/api/jobs/enqueue")
-async def enqueue_job(req: EnqueueRequest):
-    if not redis_client:
-        return JSONResponse(status_code=503, content={"detail": "Redis not available"})
-    job = {"type": req.job_type, "payload": req.payload, "queued_at": datetime.utcnow().isoformat()}
-    await redis_client.lpush("openclaw:jobs", json.dumps(job))
-    return {"queued": True}
 
-@app.get("/api/jobs/queue")
-async def list_queue():
-    if not redis_client:
-        return {"jobs": [], "length": 0}
-    jobs = await redis_client.lrange("openclaw:jobs", 0, -1)
-    return {"jobs": [json.loads(j) for j in jobs], "length": len(jobs)}
+@app.delete("/api/jobs/queue/{job_id}", status_code=204)
+async def delete_job(job_id: str):
+    if job_id not in jobs_store:
+        raise HTTPException(status_code=404, detail="Job not found")
+    del jobs_store[job_id]
 
-# -- Phase 4: Autonomous background loop ---------------------------------------
-async def autonomous_loop():
-    await asyncio.sleep(10)  # let FastAPI finish starting
-    logger.info("[LOOP] Autonomous loop running")
-    while True:
-        try:
-            await run_loop_tick()
-        except Exception as e:
-            logger.error(f"[LOOP] Tick error: {e}")
-        await asyncio.sleep(LOOP_INTERVAL)
+# ─── Tree nodes ───────────────────────────────────────────────────────────────
 
-async def run_loop_tick():
-    # 1. Drain job queue (up to 5 per tick)
-    if redis_client:
-        for _ in range(5):
-            raw = await redis_client.rpop("openclaw:jobs")
-            if not raw:
-                break
-            job = json.loads(raw)
-            logger.info(f"[LOOP] Running job: {job['type']}")
-            await dispatch_job(job)
-    # 2. Scheduled autonomous work
-    now = datetime.utcnow()
-    if now.minute % 10 == 0:
-        await autonomous_task_check()
-    if now.minute == 0:
-        await autonomous_reflect()
-    if now.hour == 3 and now.minute == 0:
-        await autonomous_reorganise()
+@app.get("/api/tree/nodes", response_model=list[TreeNode])
+async def get_tree_nodes():
+    return list(tree_nodes_store.values())
 
-async def dispatch_job(job: dict):
-    jtype = job.get("type")
-    payload = job.get("payload", {})
-    if jtype == "exec_code":
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.post(
-                    FUNCTION_BUN_URL,
-                    headers={"Authorization": f"Bearer {FUNCTION_BUN_TOKEN}"},
-                    json=payload,
-                )
-                result = resp.json()
-            path = f"workspace/job_results/{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
-            await write_github_file(path, json.dumps(result, indent=2), f"OpenClaw: job result {jtype}")
-        except Exception as e:
-            logger.error(f"[LOOP] exec_code job failed: {e}")
-    elif jtype == "write_file":
-        await write_github_file(payload["path"], payload["content"], payload.get("message", "OpenClaw: autonomous write"))
-    elif jtype == "reflect":
-        await autonomous_reflect()
-    elif jtype == "llm_task":
-        response = await call_openclaw_llm(payload["prompt"])
-        if payload.get("write_to"):
-            await write_github_file(payload["write_to"], response, payload.get("message", "OpenClaw: autonomous LLM task"))
 
-async def autonomous_task_check():
-    tasks_md = await read_github_file("memory/tasks.md")
-    pending = [l for l in tasks_md.splitlines() if l.strip().startswith("- [ ]")]
-    if not pending:
-        return
-    logger.info(f"[LOOP] {len(pending)} pending tasks found")
-    status = {"checked_at": datetime.utcnow().isoformat(), "pending_count": len(pending), "pending": pending[:20]}
-    await write_github_file("workspace/status/tasks_status.json", json.dumps(status, indent=2), "OpenClaw: task status check")
-    # Sync pending items into the in-memory _tasks list so the UI sees them
-    existing_titles = {t["title"].strip().lower() for t in _tasks}
-    for line in pending[:20]:
-        title = line.strip().lstrip("- [ ]").strip()
-        if not title or title.lower() in existing_titles:
-            continue
-        new_task = {
-            "id": uuid.uuid4().hex[:8],
-            "title": title,
-            "status": "pending",
-            "source": "autonomous",
-            "created_at": time.time(),
-            "updated_at": time.time(),
-        }
-        _tasks.append(new_task)
-        existing_titles.add(title.lower())
-        logger.info(f"[LOOP] Surfaced task to UI: {title}")
+@app.post("/api/tree/nodes", response_model=TreeNode)
+async def create_tree_node(body: TreeNodeCreate):
+    node = TreeNode(
+        id=str(uuid.uuid4()),
+        parent_id=body.parent_id,
+        label=body.label,
+        status=body.status,
+        type=body.type,
+        metadata=body.metadata,
+        created_at=time.time(),
+        updated_at=time.time(),
+    )
+    tree_nodes_store[node.id] = node.model_dump()
+    return node
 
-async def autonomous_reflect():
-    logger.info("[LOOP] Running autonomous reflection")
-    # Create a visible task so the UI shows the agent is working
-    _reflect_task = {"id": uuid.uuid4().hex[:8], "title": f"Self-reflection ({datetime.utcnow().strftime('%H:%M UTC')})", "status": "in_progress", "source": "autonomous", "created_at": time.time(), "updated_at": time.time()}
-    _tasks.append(_reflect_task)
+
+@app.patch("/api/tree/nodes/{node_id}", response_model=TreeNode)
+async def update_tree_node(node_id: str, body: TreeNodeUpdate):
+    if node_id not in tree_nodes_store:
+        raise HTTPException(status_code=404, detail="Tree node not found")
+    data = tree_nodes_store[node_id]
+    updates = body.model_dump(exclude_none=True)
+    data.update({**updates, "updated_at": time.time()})
+    tree_nodes_store[node_id] = data
+    return TreeNode(**data)
+
+
+@app.delete("/api/tree/nodes/{node_id}", status_code=204)
+async def delete_tree_node(node_id: str):
+    if node_id not in tree_nodes_store:
+        raise HTTPException(status_code=404, detail="Tree node not found")
+    del tree_nodes_store[node_id]
+
+# ─── Memory files ─────────────────────────────────────────────────────────────
+
+MEMORY_FILES = {"profile", "tasks", "conversations", "automations"}
+
+
+@app.get("/api/memory/{file_name}")
+async def get_memory_file(file_name: str):
+    if file_name not in MEMORY_FILES:
+        raise HTTPException(status_code=404, detail=f"Unknown memory file: {file_name}")
+
+    path = os.path.join(MEMORY_DIR, f"{file_name}.md")
     try:
-        prompt = ("You are reviewing your own memory files. Identify: "
-              "1) Any contradictions or outdated information. "
-              "2) Patterns in the user's behaviour or preferences you should remember better. "
-              "3) Any tools or capabilities you wish you had. "
-              "4) One concrete improvement you could make to your own prompts or knowledge structure. "
-              "Write a short reflection (max 300 words) in markdown.")
-        reflection = await call_openclaw_llm(prompt, system="You are OpenClaw performing self-reflection.")
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        path = f"workspace/reflections/{datetime.utcnow().strftime('%Y%m%d')}.md"
-        await write_github_file(path, f"# Reflection {now}\n\n{reflection}\n", f"OpenClaw: autonomous reflection {now}")
-        _reflect_task["status"] = "completed"
-        _reflect_task["updated_at"] = time.time()
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        updated_at = os.path.getmtime(path)
+    except FileNotFoundError:
+        content = f"# {file_name}\n\n(no content yet)"
+        updated_at = time.time()
+
+    preview = content.strip()[:120].replace("\n", " ")
+    return {
+        "file":       file_name,
+        "path":       path,
+        "content":    content,
+        "preview":    preview,
+        "updated_at": updated_at,
+        "size":       len(content.encode("utf-8")),
+    }
+
+# ─── Integration status ───────────────────────────────────────────────────────
+
+@app.get("/api/integrations/status")
+async def get_integrations_status():
+    telegram_online = False
+    bot_username = f"@{telegram_stats['last_username']}"
+
+    if TELEGRAM_BOT_TOKEN:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
+                )
+                if r.status_code == 200:
+                    info = r.json().get("result", {})
+                    bot_username = f"@{info.get('username', telegram_stats['last_username'])}"
+                    telegram_stats["last_username"] = info.get("username", telegram_stats["last_username"])
+                    telegram_online = True
+        except Exception:
+            pass
+
+    return {
+        "telegram": {
+            "bot_username": bot_username,
+            "status":       "online" if telegram_online else "offline",
+            "message_count": telegram_stats["message_count"],
+        }
+    }
+
+# ─── OpenClaw status ──────────────────────────────────────────────────────────
+
+@app.get("/api/openclaw/status")
+async def get_openclaw_status():
+    # If OpenClaw gateway is configured, try to ping it
+    gateway_ok = False
+    if OPENCLAW_API_URL and OPENCLAW_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(
+                    f"{OPENCLAW_API_URL}/health",
+                    headers={"Authorization": f"Bearer {OPENCLAW_API_KEY}"},
+                )
+                gateway_ok = r.status_code == 200
+        except Exception:
+            pass
+
+    # If using direct Anthropic, treat as online when key is present
+    is_online = gateway_ok or bool(ANTHROPIC_API_KEY) or bool(OPENCLAW_API_URL)
+
+    return {
+        "status":  "online" if is_online else "offline",
+        "model":   CLAUDE_MODEL,
+        "gateway": bool(OPENCLAW_API_URL),
+    }
+
+# ─── OpenClaw chat ────────────────────────────────────────────────────────────
+
+@app.post("/api/openclaw/chat")
+async def openclaw_chat(body: ChatRequest):
+    messages = body.conversation_history + [
+        {"role": "user", "content": body.message}
+    ]
+
+    # Try OpenClaw gateway first
+    if OPENCLAW_API_URL and OPENCLAW_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    f"{OPENCLAW_API_URL}/chat",
+                    json={
+                        "message": body.message,
+                        "history": body.conversation_history,
+                        "system":  BASE_INSTRUCTIONS,
+                    },
+                    headers={"Authorization": f"Bearer {OPENCLAW_API_KEY}"},
+                )
+                r.raise_for_status()
+                data = r.json()
+                return {"response": data.get("response", data.get("message", str(data)))}
+        except Exception as exc:
+            # Fall through to direct Anthropic
+            print(f"[openclaw gateway error] {exc}")
+
+    if not ANTHROPIC_API_KEY:
+        return {
+            "response": (
+                "[OpenClaw offline — set ANTHROPIC_API_KEY or OPENCLAW_API_URL + OPENCLAW_API_KEY]"
+            )
+        }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key":         ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            json={
+                "model":      CLAUDE_MODEL,
+                "max_tokens": 1024,
+                "system":     BASE_INSTRUCTIONS,
+                "messages":   messages,
+            },
+        )
+        r.raise_for_status()
+        data = r.json()
+        text = data["content"][0]["text"] if data.get("content") else ""
+        return {"response": text}
+
+# ─── LiveKit token ────────────────────────────────────────────────────────────
+
+@app.get("/api/token")
+async def get_livekit_token(room: str = "gitwix", identity: str = "user"):
+    if not LIVEKIT_API_KEY or not LIVEKIT_SECRET:
+        return {"token": "", "url": LIVEKIT_URL, "error": "LiveKit credentials not set"}
+
+    try:
+        from livekit.api import AccessToken, VideoGrants  # type: ignore
+
+        token = (
+            AccessToken(LIVEKIT_API_KEY, LIVEKIT_SECRET)
+            .with_identity(identity)
+            .with_grants(VideoGrants(room_join=True, room=room))
+            .to_jwt()
+        )
+        return {"token": token, "url": LIVEKIT_URL}
+    except ImportError:
+        return {"token": "", "url": LIVEKIT_URL, "error": "livekit-api package not installed"}
     except Exception as e:
-        _reflect_task["status"] = "failed"
-        _reflect_task["updated_at"] = time.time()
-        logger.error(f"[LOOP] Reflection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-async def autonomous_reorganise():
-    logger.info("[LOOP] Running daily knowledge reorganisation")
-    memory = await load_memory()
-    prompt = ("Review all your memory files below and rewrite memory/profile.md "
-              "with any new facts consolidated, duplicates removed, and structure improved. "
-              "Return ONLY the new markdown content for profile.md, nothing else.\n\n" + memory)
-    new_profile = await call_openclaw_llm(prompt, system="You are OpenClaw reorganising your knowledge base.")
-    await write_github_file("memory/profile.md", new_profile, f"OpenClaw: daily knowledge reorganisation {datetime.utcnow().strftime('%Y-%m-%d')}")
+# ─── Telegram webhook ─────────────────────────────────────────────────────────
 
-# -- SPA static files ----------------------------------------------------------
-if os.path.isdir(os.path.join(DIST_DIR, "assets")):
-    app.mount("/assets", StaticFiles(directory=os.path.join(DIST_DIR, "assets")), name="assets")
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(body: dict):
+    """
+    Register this URL in BotFather:
+      https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://your-domain/api/telegram/webhook
+    """
+    if "message" in body:
+        telegram_stats["message_count"] += 1
+    return {"ok": True}
 
-@app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
-    return FileResponse(os.path.join(DIST_DIR, "index.html"))
+# ─── Health ───────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "tasks":      len(tasks_store),
+        "agents":     len(agents_store),
+        "jobs":       len(jobs_store),
+        "tree_nodes": len(tree_nodes_store),
+    }
