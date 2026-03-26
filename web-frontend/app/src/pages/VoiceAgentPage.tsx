@@ -312,6 +312,91 @@ const SKILLS_DATA: SkillDef[] = [
     id: 'calendar', name: 'Calendar Booking', icon: '📅', description: 'Schedule meetings automatically', category: 'Automation & Analytics',
     requiredCredentials: [{ key: 'calendarApiKey', label: 'Calendar API Key (Cal.com/Calendly)', placeholder: 'cal_...', type: 'password' }],
   },
+  // WhatsApp / Pinterest / Reddit
+  {
+    id: 'whatsapp', name: 'WhatsApp Business', icon: '💬', description: 'Automated messaging & support', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'accessToken',    label: 'Access Token',    placeholder: 'EAABsb...', type: 'password' },
+      { key: 'phoneNumberId',  label: 'Phone Number ID', placeholder: '123456789', type: 'text'     },
+    ],
+  },
+  {
+    id: 'pinterest', name: 'Pinterest', icon: '📌', description: 'Pin content & drive traffic', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'accessToken',  label: 'Access Token',   placeholder: 'pina-...', type: 'password' },
+      { key: 'adAccountId',  label: 'Ad Account ID',  placeholder: '549755813', type: 'text'    },
+    ],
+  },
+  {
+    id: 'reddit', name: 'Reddit', icon: '🤖', description: 'Post & engage in subreddits', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'clientId',     label: 'Client ID',      placeholder: 'abc123',    type: 'text'     },
+      { key: 'clientSecret', label: 'Client Secret',  placeholder: 'secret...',  type: 'password' },
+      { key: 'refreshToken', label: 'Refresh Token',  placeholder: 'refresh...', type: 'password' },
+    ],
+  },
+  // Slack / Discord
+  {
+    id: 'slack', name: 'Slack Integration', icon: '💼', description: 'Team notifications & commands', category: 'Automation & Analytics',
+    requiredCredentials: [
+      { key: 'botToken',      label: 'Bot Token',      placeholder: 'xoxb-...', type: 'password' },
+      { key: 'signingSecret', label: 'Signing Secret', placeholder: 'secret...', type: 'password' },
+    ],
+  },
+  {
+    id: 'discord', name: 'Discord Bot', icon: '🎮', description: 'Server notifications & commands', category: 'Automation & Analytics',
+    requiredCredentials: [
+      { key: 'botToken', label: 'Bot Token', placeholder: 'MToxxx...', type: 'password' },
+    ],
+  },
+  // Stripe / Shopify
+  {
+    id: 'stripe', name: 'Stripe Payments', icon: '💳', description: 'Track revenue & invoices', category: 'CRM & Leads',
+    requiredCredentials: [
+      { key: 'apiKey', label: 'Secret Key', placeholder: 'sk_live_...', type: 'password' },
+    ],
+  },
+  {
+    id: 'shopify', name: 'Shopify', icon: '🛍️', description: 'E-commerce store management', category: 'CRM & Leads',
+    requiredCredentials: [
+      { key: 'accessToken', label: 'Access Token', placeholder: 'shpat_...', type: 'password' },
+      { key: 'shopDomain',  label: 'Shop Domain',  placeholder: 'mystore.myshopify.com', type: 'text' },
+    ],
+  },
+  // WordPress / SEO Analyzer / Google Analytics
+  {
+    id: 'wordpress', name: 'WordPress', icon: '📝', description: 'Blog & content management', category: 'Content & Branding',
+    requiredCredentials: [
+      { key: 'siteUrl',             label: 'Site URL',             placeholder: 'https://mysite.com', type: 'text'     },
+      { key: 'applicationPassword', label: 'Application Password', placeholder: 'xxxx xxxx xxxx',    type: 'password' },
+    ],
+  },
+  {
+    id: 'seo-analyzer', name: 'SEO Analyzer', icon: '🔍', description: 'Keyword tracking & site audit', category: 'Content & Branding',
+    requiredCredentials: [
+      { key: 'apiKey', label: 'API Key (Ahrefs/SEMrush)', placeholder: 'sk-...', type: 'password' },
+    ],
+  },
+  {
+    id: 'google-analytics', name: 'Google Analytics', icon: '📊', description: 'Website traffic & conversion data', category: 'Automation & Analytics',
+    requiredCredentials: [
+      { key: 'propertyId',        label: 'Property ID',          placeholder: '123456789',    type: 'text'     },
+      { key: 'serviceAccountKey', label: 'Service Account JSON', placeholder: '{"type":"...',  type: 'password' },
+    ],
+  },
+  // Twilio / Landing Page Builder
+  {
+    id: 'twilio', name: 'Twilio SMS', icon: '📱', description: 'Send SMS & voice calls', category: 'Email & Outreach',
+    requiredCredentials: [
+      { key: 'accountSid',  label: 'Account SID',  placeholder: 'ACxxx...',    type: 'text'     },
+      { key: 'authToken',   label: 'Auth Token',   placeholder: 'auth_token',  type: 'password' },
+      { key: 'phoneNumber', label: 'Phone Number', placeholder: '+15551234567', type: 'text'     },
+    ],
+  },
+  {
+    id: 'landing-page', name: 'Landing Page Builder', icon: '🚀', description: 'Create & A/B test landing pages', category: 'Content & Branding',
+    requiredCredentials: [],
+  },
 ]
 
 // ─── Node size registry ───────────────────────────────────────────────────────
@@ -326,7 +411,7 @@ const SZ = {
   agentNode:       { w: 208, h: 72  },
   jobNode:         { w: 208, h: 72  },
   customNode:      { w: 200, h: 72  },
-  skillNode:       { w: 200, h: 72  },
+  skillNode:       { w: 260, h: 88  },
 } as const
 
 // ─── Dagre layout ─────────────────────────────────────────────────────────────
@@ -548,7 +633,18 @@ function sc(s?: string): { border: string; bg: string; text: string; dot: string
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
 
-const INV: CSSProperties = { opacity: 0, width: 1, height: 1, minWidth: 1, minHeight: 1 }
+const HANDLE_STYLE: CSSProperties = {}
+
+const skillNodeTitleStyle: CSSProperties = {
+  ...{ fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', lineHeight: 1.3 },
+  color: '#60a5fa', wordBreak: 'break-word',
+  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden',
+}
+
+const skillNodeCategoryStyle: CSSProperties = {
+  fontSize: 9, color: '#4b5563', letterSpacing: '0.08em',
+  marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+}
 
 function Dot({ color, pulse = false }: { color: string; pulse?: boolean }) {
   return (
@@ -582,7 +678,7 @@ const InputNode = memo(({ data }: NodeProps) => {
   const c = sc(data.status as string)
   return (
     <div style={{ ...nBase, width: SZ.inputNode.w, height: SZ.inputNode.h, borderColor: c.border, background: c.bg, boxShadow: `0 0 16px ${c.border}28` }}>
-      <Handle type="source" position={Position.Bottom} style={INV} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <span style={{ fontSize: 18, lineHeight: 1 }}>{data.icon as string}</span>
         <div style={{ flex: 1 }}>
@@ -610,8 +706,8 @@ const OpenClawNode = memo(({ data }: NodeProps) => {
       boxShadow: online ? '0 0 40px #d9770640,0 0 12px #d9770618,inset 0 1px 0 #d9770628' : 'none',
       position: 'relative', overflow: 'hidden',
     }}>
-      <Handle type="target" position={Position.Top}    style={INV} />
-      <Handle type="source" position={Position.Bottom} style={INV} />
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       {online && (
         <div style={{ position: 'absolute', inset: 0, borderRadius: 10, pointerEvents: 'none',
           background: 'radial-gradient(ellipse at 50% 0%,#d9770612 0%,transparent 70%)' }} />
@@ -651,8 +747,8 @@ OpenClawNode.displayName = 'OpenClawNode'
 
 const BranchNode = memo(({ data }: NodeProps) => (
   <div style={{ ...nBase, width: SZ.branchNode.w, height: SZ.branchNode.h, background: '#111318', border: '1px solid #2d3748', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-    <Handle type="target" position={Position.Top}    style={INV} />
-    <Handle type="source" position={Position.Bottom} style={INV} />
+    <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+    <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
     <span style={{ fontSize: 11, color: '#4b5563' }}>{data.icon as string}</span>
     <span style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 600, fontSize: 10, letterSpacing: '0.15em', color: '#94a3b8' }}>
       {data.label as string}
@@ -663,8 +759,8 @@ BranchNode.displayName = 'BranchNode'
 
 const MemoryFileNode = memo(({ data }: NodeProps) => (
   <div style={{ ...nBase, width: SZ.memoryFileNode.w, height: SZ.memoryFileNode.h, background: '#0d1117', border: '1px solid #21262d' }}>
-    <Handle type="target" position={Position.Top}    style={INV} />
-    <Handle type="source" position={Position.Bottom} style={INV} />
+    <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+    <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
       <span style={{ fontSize: 12 }}>{data.icon as string}</span>
       <div style={{ ...nTitle, color: '#c9d1d9', fontSize: 10 }}>memory/{data.file as string}.md</div>
@@ -682,8 +778,8 @@ MemoryFileNode.displayName = 'MemoryFileNode'
 
 const GroupHeaderNode = memo(({ data }: NodeProps) => (
   <div style={{ ...nBase, width: SZ.groupHeaderNode.w, height: SZ.groupHeaderNode.h, background: '#0e1117', border: `1px solid ${data.color as string}30`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 14px' }}>
-    <Handle type="target" position={Position.Top}    style={INV} />
-    <Handle type="source" position={Position.Bottom} style={INV} />
+    <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+    <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
     <span style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 600, fontSize: 10, letterSpacing: '0.15em', color: data.color as string }}>
       {data.label as string}
     </span>
@@ -699,8 +795,8 @@ const TaskNode = memo(({ data }: NodeProps) => {
   const c = sc(t.status)
   return (
     <div style={{ ...nBase, width: SZ.taskNode.w, height: SZ.taskNode.h, background: c.bg, borderColor: c.border, boxShadow: `0 0 8px ${c.border}22` }}>
-      <Handle type="target" position={Position.Top}    style={INV} />
-      <Handle type="source" position={Position.Bottom} style={INV} />
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={t.status === 'in_progress'} />
         <span style={{ ...nTitle, color: c.text, flex: 1 }}>
@@ -723,8 +819,8 @@ const AgentNode = memo(({ data }: NodeProps) => {
   const c = sc(a.status)
   return (
     <div style={{ ...nBase, width: SZ.agentNode.w, height: SZ.agentNode.h, background: c.bg, border: `1px dashed ${c.border}` }}>
-      <Handle type="target" position={Position.Top}    style={INV} />
-      <Handle type="source" position={Position.Bottom} style={INV} />
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={a.status === 'active'} />
         <span style={{ ...nTitle, color: c.text, flex: 1 }}>
@@ -745,8 +841,8 @@ const JobNode = memo(({ data }: NodeProps) => {
   const c = sc(j.status)
   return (
     <div style={{ ...nBase, width: SZ.jobNode.w, height: SZ.jobNode.h, background: c.bg, borderColor: c.border }}>
-      <Handle type="target" position={Position.Top}    style={INV} />
-      <Handle type="source" position={Position.Bottom} style={INV} />
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={j.status === 'running'} />
         <span style={{ ...nTitle, color: c.text, flex: 1 }}>
@@ -767,8 +863,8 @@ const CustomNode = memo(({ data }: NodeProps) => {
   const c = sc(tn.status)
   return (
     <div style={{ ...nBase, width: SZ.customNode.w, height: SZ.customNode.h, background: '#120d1f', border: `1px dashed ${c.border}` }}>
-      <Handle type="target" position={Position.Top}    style={INV} />
-      <Handle type="source" position={Position.Bottom} style={INV} />
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={tn.status === 'thinking' || tn.status === 'active'} />
         <span style={{ ...nTitle, color: '#c084fc', flex: 1 }}>
@@ -787,16 +883,16 @@ CustomNode.displayName = 'CustomNode'
 const SkillNode = memo(({ data }: NodeProps) => {
   const c = sc(data.status as string | undefined)
   return (
-    <div style={{ ...nBase, width: SZ.skillNode.w, height: SZ.skillNode.h, background: '#0d1a2e', border: `1px solid ${c.border}`, boxShadow: `0 0 8px ${c.border}22` }}>
-      <Handle type="target" position={Position.Top}    style={INV} />
-      <Handle type="source" position={Position.Bottom} style={INV} />
+    <div style={{ ...nBase, width: SZ.skillNode.w, height: SZ.skillNode.h, background: '#0d1a2e', border: `1px solid ${c.border}`, boxShadow: `0 0 8px ${c.border}22`, padding: '10px 12px' }}>
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <span style={{ fontSize: 16, lineHeight: 1.2, flexShrink: 0 }}>{data.icon as string}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ ...nTitle, color: '#60a5fa', fontSize: 10 }}>
-            {(data.name as string).length > MAX_SKILL_NAME_LEN ? (data.name as string).slice(0, MAX_SKILL_NAME_LEN) + '…' : (data.name as string)}
+          <div style={skillNodeTitleStyle}>
+            {data.name as string}
           </div>
-          <div style={{ ...nSub, marginTop: 2 }}>{data.category as string}</div>
+          <div style={skillNodeCategoryStyle}>{data.category as string}</div>
         </div>
         <Dot color={c.dot} pulse={data.status === 'active'} />
       </div>
@@ -825,8 +921,6 @@ const nodeTypes = {
 }
 
 // ─── Skills constants ──────────────────────────────────────────────────────────
-
-const MAX_SKILL_NAME_LEN = 22
 
 const skillCardNameStyle: CSSProperties = {
   fontSize: 8, fontWeight: 600, color: '#c9d1d9', textAlign: 'center',
@@ -1398,16 +1492,16 @@ function VoiceAgentPageInner() {
 
             {/* Skills panel (collapsible) */}
             {skillMenuOpen && (
-              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 14px 10px', gap: 8, overflow: 'hidden' }}>
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 14px 10px', gap: 6, overflow: 'hidden' }}>
                 {/* Search */}
                 <input
-                  style={{ ...css.chatInput, width: '100%' }}
+                  style={{ ...css.chatInput, width: '100%', height: 28, padding: '5px 8px', fontSize: 10 }}
                   value={skillSearch}
                   onChange={(e) => setSkillSearch(e.target.value)}
                   placeholder="Search skills…"
                 />
                 {/* Card grid */}
-                <div style={{ overflowY: 'auto', flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, paddingRight: 2 }}>
+                <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 620px)', minHeight: 260, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, paddingRight: 2 }}>
                   {filteredSkills.map((skill) => {
                     const configured = skillConfigs[skill.id]?.configured ?? false
                     const draggable  = configured
@@ -1422,13 +1516,13 @@ function VoiceAgentPageInner() {
                           background: '#0d0d1a',
                           border: `1px solid ${configured ? '#22c55e44' : '#2a2a4a'}`,
                           borderRadius: 6,
-                          padding: '7px 5px 6px',
+                          padding: '5px 4px 5px',
                           cursor: draggable ? 'grab' : 'pointer',
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
                           gap: 3,
-                          minHeight: 70,
+                          minHeight: 58,
                           position: 'relative',
                           transition: 'border-color 0.15s, background 0.15s',
                           userSelect: 'none',
@@ -1437,8 +1531,8 @@ function VoiceAgentPageInner() {
                         {configured && (
                           <span style={{ position: 'absolute', top: 4, right: 5, width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
                         )}
-                        <span style={{ fontSize: 16, lineHeight: 1.2 }}>{skill.icon}</span>
-                        <span style={skillCardNameStyle}>
+                        <span style={{ fontSize: 18, lineHeight: 1.2 }}>{skill.icon}</span>
+                        <span style={{ ...skillCardNameStyle, fontSize: 7.5 }}>
                           {skill.name}
                         </span>
                       </div>
@@ -1692,6 +1786,14 @@ const GLOBAL_CSS = `
   }
   .react-flow__controls-button:hover { background: #1f2937 !important; color: #d1d5db !important; }
   .react-flow__edge-path { stroke-linecap: round; }
+  .react-flow__handle {
+    width: 14px !important; height: 14px !important;
+    background: #1a1a2e !important; border: 2px solid #fbbf24 !important;
+    border-radius: 50% !important;
+  }
+  .react-flow__handle:hover {
+    transform: scale(1.3); border-color: #f59e0b !important; background: #2a2a4a !important;
+  }
 `
 
 // ─── Page-level styles ────────────────────────────────────────────────────────
