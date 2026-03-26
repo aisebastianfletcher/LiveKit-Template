@@ -25,5 +25,9 @@ OpenClaw saves short summaries of each conversation here instead of storing full
 ### 2026-03-26 08:57 UTC (text chat)
 (raw) User: can you see github?\
 
+
+### 2026-03-26 08:59 UTC (text chat)
+(raw) User: this isn't all its for, you can develop yourself in this github. Just remember you run on credits. Y
+
 ---
 *Each entry is a 2-3 sentence summary of what was discussed and any decisions made.*
