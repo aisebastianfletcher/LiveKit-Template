@@ -138,6 +138,16 @@ interface SkillConfig {
   credentials: Record<string, string>
 }
 
+interface Workflow {
+  id: string
+  name: string
+  description: string
+  skillNodes: Node[]
+  skillEdges: Edge[]
+  status: 'draft' | 'active' | 'paused'
+  createdAt: number
+}
+
 // ─── Skills data ──────────────────────────────────────────────────────────────
 
 const SKILLS_DATA: SkillDef[] = [
@@ -885,6 +895,21 @@ function VoiceAgentPageInner() {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([])
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([])
 
+  // ── Workflow & canvas skill state ─────────────────────────────────────────
+  const [canvasSkillNodes, setCanvasSkillNodes] = useState<Node[]>([])
+  const [canvasSkillEdges, setCanvasSkillEdges] = useState<Edge[]>([])
+  const [workflows,        setWorkflows]        = useState<Workflow[]>([])
+  const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null)
+  const [workflowsPanelOpen, setWorkflowsPanelOpen] = useState(true)
+
+  // ── Save workflow modal ────────────────────────────────────────────────────
+  const [saveModalOpen,   setSaveModalOpen]   = useState(false)
+  const [wfName,          setWfName]          = useState('')
+  const [wfDescription,   setWfDescription]  = useState('')
+
+  // ── Context menu ──────────────────────────────────────────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null)
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -962,12 +987,22 @@ function VoiceAgentPageInner() {
         icon:     skill.icon,
         name:     skill.name,
         category: skill.category,
+        skillId:  skill.id,
         status:   'active',
       },
     }
-    setRfNodes((prev) => [...prev, newNode])
-    setRfEdges((prev) => [...prev, mkEdge('openclaw', newNodeId, 'custom')])
-  }, [rfInstance, setRfNodes, setRfEdges])
+    setCanvasSkillNodes((prev) => [...prev, newNode])
+    // Notify OpenClaw about the new skill; errors are non-critical so swallow silently
+    void fetch('/api/openclaw/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: `[SKILL ADDED] I've added ${skill.name} to my workflow canvas. It's ready to be connected.` }),
+    }).then((r) => r.json()).then((d) => {
+      setMessages((p) => [...p, { role: 'assistant', text: d.response ?? d.message ?? '✅ Skill added.', timestamp: new Date() }])
+    }).catch(() => {
+      setMessages((p) => [...p, { role: 'assistant', text: `✅ ${skill.name} added to canvas.`, timestamp: new Date() }])
+    })
+  }, [rfInstance, setCanvasSkillNodes, setMessages])
 
   const filteredSkills = useMemo(() => {
     const q = skillSearch.trim().toLowerCase()
@@ -976,6 +1011,86 @@ function VoiceAgentPageInner() {
       (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q) || s.category.toLowerCase().includes(q)
     )
   }, [skillSearch])
+
+  // ── Workflow handlers ─────────────────────────────────────────────────────
+  const saveWorkflow = useCallback(() => {
+    if (!wfName.trim()) return
+    const wf: Workflow = {
+      id: `wf-${Date.now()}`,
+      name: wfName.trim(),
+      description: wfDescription.trim(),
+      skillNodes: canvasSkillNodes,
+      skillEdges: canvasSkillEdges,
+      status: 'draft',
+      createdAt: Date.now(),
+    }
+    setWorkflows((prev) => [...prev, wf])
+    setSaveModalOpen(false)
+    setWfName('')
+    setWfDescription('')
+  }, [wfName, wfDescription, canvasSkillNodes, canvasSkillEdges])
+
+  const loadWorkflow = useCallback((wf: Workflow) => {
+    setCanvasSkillNodes(wf.skillNodes)
+    setCanvasSkillEdges(wf.skillEdges)
+    setActiveWorkflowId(wf.id)
+  }, [])
+
+  const activateWorkflow = useCallback(async (wf: Workflow) => {
+    const skillNames = wf.skillNodes.map((n) => n.data.name as string).join(' -> ')
+    const newStatus = wf.status === 'active' ? 'paused' : 'active'
+    const msg = `[WORKFLOW ACTIVATED] Workflow '${wf.name}': Skills chain: ${skillNames}. Description: ${wf.description}. Please acknowledge and begin monitoring these integrations.`
+    try {
+      const res = await fetch('/api/openclaw/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg }),
+      })
+      const d = await res.json()
+      setWorkflows((prev) => prev.map((w) => w.id === wf.id ? { ...w, status: newStatus } : w))
+      setMessages((p) => [...p, { role: 'assistant', text: d.response ?? d.message ?? '✅ Workflow activated.', timestamp: new Date() }])
+    } catch {
+      setMessages((p) => [...p, { role: 'assistant', text: '⚠ Could not contact OpenClaw. Workflow status unchanged.', timestamp: new Date() }])
+    }
+  }, [setMessages])
+
+  const clearCanvas = useCallback(() => {
+    setCanvasSkillNodes([])
+    setCanvasSkillEdges([])
+    setActiveWorkflowId(null)
+  }, [])
+
+  const onNodeContextMenu = useCallback((e: { preventDefault: () => void; clientX: number; clientY: number }, node: Node) => {
+    if (node.type !== 'skillNode') return
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY, nodeId: node.id })
+  }, [])
+
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), [])
+
+  const ctxRemoveNode = useCallback(() => {
+    if (!ctxMenu) return
+    setCanvasSkillNodes((prev) => prev.filter((n) => n.id !== ctxMenu.nodeId))
+    setCanvasSkillEdges((prev) => prev.filter((e) => e.source !== ctxMenu.nodeId && e.target !== ctxMenu.nodeId))
+    closeCtxMenu()
+  }, [ctxMenu, closeCtxMenu])
+
+  const ctxDisconnect = useCallback(() => {
+    if (!ctxMenu) return
+    setCanvasSkillEdges((prev) => prev.filter((e) => e.source !== ctxMenu.nodeId && e.target !== ctxMenu.nodeId))
+    closeCtxMenu()
+  }, [ctxMenu, closeCtxMenu])
+
+  const ctxConfigure = useCallback(() => {
+    if (!ctxMenu) return
+    const node = canvasSkillNodes.find((n) => n.id === ctxMenu.nodeId)
+    if (node) {
+      const skillId = node.data.skillId as string | undefined
+      const skill = skillId ? SKILLS_DATA.find((s) => s.id === skillId) : null
+      if (skill) openSkillModal(skill)
+    }
+    closeCtxMenu()
+  }, [ctxMenu, canvasSkillNodes, openSkillModal, closeCtxMenu])
 
   // ── Polls ─────────────────────────────────────────────────────────────────
   const [tasks,       setTasks]       = useState<Task[]>([])
@@ -1041,8 +1156,29 @@ function VoiceAgentPageInner() {
   }, [])
 
   const onConnect = useCallback(
-    (params: Connection) => setRfEdges((eds: Edge[]) => addEdge(params, eds)),
-    [setRfEdges]
+    (params: Connection) => {
+      // Check if both endpoints are skill nodes
+      const srcIsSkill = rfNodes.some((n) => n.id === params.source && n.type === 'skillNode')
+      const tgtIsSkill = rfNodes.some((n) => n.id === params.target && n.type === 'skillNode')
+      // Use OR: any edge involving a skill node is stored in canvasSkillEdges so it
+      // survives graph rebuilds (e.g. skill → openclaw or skill → skill both need tracking)
+      if (srcIsSkill || tgtIsSkill) {
+        const baseEdge = addEdge(params, [])
+        if (baseEdge.length > 0) {
+          const first = baseEdge[0] as Edge
+          const newEdge: Edge = {
+            ...first,
+            type: 'smoothstep',
+            style: { stroke: '#6d28d9', strokeWidth: 1.5, strokeDasharray: '5 3' },
+            label: (srcIsSkill && tgtIsSkill) ? 'data' : undefined,
+          }
+          setCanvasSkillEdges((eds) => [...eds, newEdge])
+        }
+      } else {
+        setRfEdges((eds) => addEdge(params, eds))
+      }
+    },
+    [rfNodes, setRfEdges, setCanvasSkillEdges]
   )
 
   // Stable graph key — only rebuild when data actually changes
@@ -1068,13 +1204,18 @@ function VoiceAgentPageInner() {
       chatMsgCount: messages.length,
     })
     // Preserve positions the user has dragged to; only use built positions for new nodes
+    // Merge with user-placed skill nodes so they are never overwritten
     setRfNodes((prev) => {
       const posMap = new Map(prev.map((n) => [n.id, n.position]))
-      return nodes.map((n) => posMap.has(n.id) ? { ...n, position: posMap.get(n.id)! } : n)
+      const baseNodes = nodes.map((n) => posMap.has(n.id) ? { ...n, position: posMap.get(n.id)! } : n)
+      // Skill nodes that are already in base (from buildGraph) should not be duplicated
+      const baseIds = new Set(baseNodes.map((n) => n.id))
+      const extraSkillNodes = canvasSkillNodes.filter((n) => !baseIds.has(n.id))
+      return [...baseNodes, ...extraSkillNodes]
     })
-    setRfEdges(edges)
+    setRfEdges([...edges, ...canvasSkillEdges])
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graphKey])
+  }, [graphKey, canvasSkillNodes, canvasSkillEdges])
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
@@ -1182,6 +1323,65 @@ function VoiceAgentPageInner() {
 
           <Divider />
 
+          {/* Workflows section */}
+          <div style={{ display: 'flex', flexDirection: 'column', flex: '0 0 auto', minHeight: 0, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px 8px' }}>
+              <SectionLabel>WORKFLOWS</SectionLabel>
+              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                {canvasSkillNodes.length > 0 && (
+                  <button
+                    onClick={() => setSaveModalOpen(true)}
+                    style={{ background: '#1c1100', border: '1px solid #d97706', borderRadius: 4, color: '#fbbf24', cursor: 'pointer', padding: '3px 7px', fontSize: 9, lineHeight: 1, letterSpacing: '0.08em' }}
+                  >+ Save</button>
+                )}
+                <button
+                  onClick={() => setWorkflowsPanelOpen((v) => !v)}
+                  style={{ background: 'none', border: '1px solid #2a2a4a', borderRadius: 4, color: workflowsPanelOpen ? '#fbbf24' : '#4b5563', cursor: 'pointer', padding: '3px 6px', fontSize: 11, lineHeight: 1, transition: 'all 0.15s' }}
+                >
+                  {workflowsPanelOpen ? '▾' : '▸'}
+                </button>
+              </div>
+            </div>
+            {workflowsPanelOpen && (
+              <div style={{ padding: '0 14px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {workflows.length === 0 && (
+                  <div style={{ fontSize: 9, color: '#2a2a4a', textAlign: 'center', padding: '8px 0', fontStyle: 'italic' }}>
+                    No workflows yet. Drop skills on canvas, then save.
+                  </div>
+                )}
+                {workflows.map((wf) => (
+                  <div
+                    key={wf.id}
+                    onClick={() => loadWorkflow(wf)}
+                    style={{ background: wf.id === activeWorkflowId ? '#0d1a2e' : '#0d0d1a', border: `1px solid ${wf.status === 'active' ? '#22c55e44' : '#2a2a4a'}`, borderRadius: 6, padding: '7px 9px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4 }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 9, color: '#c9d1d9', fontWeight: 600, letterSpacing: '0.04em' }}>{wf.name}</span>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        {wf.status === 'active' && <Dot color="#22c55e" pulse />}
+                        <span style={{ fontSize: 8, color: wf.status === 'active' ? '#22c55e' : '#4b5563', border: `1px solid ${wf.status === 'active' ? '#22c55e44' : '#2a2a4a'}`, borderRadius: 3, padding: '1px 4px', letterSpacing: '0.06em' }}>
+                          {wf.status}
+                        </span>
+                        <button
+                          onClick={(ev) => { ev.stopPropagation(); void activateWorkflow(wf) }}
+                          style={{ background: wf.status === 'active' ? '#052e16' : '#1c1100', border: `1px solid ${wf.status === 'active' ? '#22c55e' : '#d97706'}`, borderRadius: 3, color: wf.status === 'active' ? '#4ade80' : '#fbbf24', cursor: 'pointer', padding: '2px 5px', fontSize: 8, lineHeight: 1 }}
+                        >
+                          {wf.status === 'active' ? '⏸' : '▶'}
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 8, color: '#4b5563', letterSpacing: '0.04em' }}>
+                      {wf.skillNodes.length} skill{wf.skillNodes.length !== 1 ? 's' : ''}
+                      {wf.description && ` · ${wf.description.slice(0, 30)}${wf.description.length > 30 ? '…' : ''}`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <Divider />
+
           {/* Skills section */}
           <div style={{ display: 'flex', flexDirection: 'column', flex: skillMenuOpen ? 1 : '0 0 auto', minHeight: 0, overflow: 'hidden' }}>
             {/* Skills header row */}
@@ -1275,7 +1475,19 @@ function VoiceAgentPageInner() {
         <main style={css.canvas}>
           <div style={css.canvasBar}>
             <span style={css.canvasTitle}>Architecture</span>
-            <div style={{ display: 'flex', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              {canvasSkillNodes.length > 0 && (
+                <>
+                  <button
+                    onClick={() => setSaveModalOpen(true)}
+                    style={{ background: '#1c1100', border: '1px solid #d97706', borderRadius: 5, color: '#fbbf24', cursor: 'pointer', padding: '4px 10px', fontSize: 9, fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}
+                  >💾 Save Workflow</button>
+                  <button
+                    onClick={clearCanvas}
+                    style={{ background: '#111318', border: '1px solid #374151', borderRadius: 5, color: '#6b7280', cursor: 'pointer', padding: '4px 10px', fontSize: 9, fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}
+                  >✕ Clear Canvas</button>
+                </>
+              )}
               <span style={css.hint}>scroll · zoom</span>
               <span style={css.hint}>drag · pan</span>
               {treeNodes.length > 0 && (
@@ -1293,6 +1505,7 @@ function VoiceAgentPageInner() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              onNodeContextMenu={onNodeContextMenu}
               nodeTypes={nodeTypes}
               fitView
               fitViewOptions={{ padding: 0.18 }}
@@ -1384,6 +1597,77 @@ function VoiceAgentPageInner() {
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ SAVE WORKFLOW MODAL ════════════════════════════════════════════ */}
+      {saveModalOpen && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1001, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setSaveModalOpen(false) } }}
+        >
+          <div style={{ background: '#0d1117', border: '1px solid #2a2a4a', borderRadius: 10, padding: '24px 22px', width: 360, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: 14, boxShadow: '0 0 60px #000a' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontFamily: "'Oxanium', sans-serif", fontWeight: 700, fontSize: 13, color: '#fbbf24', letterSpacing: '0.08em' }}>Save Workflow</div>
+              <button onClick={() => setSaveModalOpen(false)} style={{ background: 'none', border: 'none', color: '#4b5563', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 4 }}>✕</button>
+            </div>
+            <div style={{ fontSize: 9, color: '#4b5563' }}>{canvasSkillNodes.length} skill node{canvasSkillNodes.length !== 1 ? 's' : ''} · {canvasSkillEdges.length} connection{canvasSkillEdges.length !== 1 ? 's' : ''}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 9, color: '#9ca3af', letterSpacing: '0.08em', fontWeight: 600, textTransform: 'uppercase' as const }}>Workflow Name</label>
+              <input
+                style={{ ...css.chatInput, width: '100%', fontSize: 11 }}
+                value={wfName}
+                onChange={(e) => setWfName(e.target.value)}
+                placeholder="e.g. Instagram Lead Funnel"
+                autoFocus
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ fontSize: 9, color: '#9ca3af', letterSpacing: '0.08em', fontWeight: 600, textTransform: 'uppercase' as const }}>Description (optional)</label>
+              <textarea
+                style={{ ...css.chatInput, width: '100%', fontSize: 10, resize: 'vertical', minHeight: 60 } as CSSProperties}
+                value={wfDescription}
+                onChange={(e) => setWfDescription(e.target.value)}
+                placeholder="What does this workflow do?"
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={saveWorkflow}
+                disabled={!wfName.trim()}
+                style={{ flex: 1, background: '#15803d', border: '1px solid #22c55e', borderRadius: 6, color: '#fff', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, padding: '9px 0', cursor: wfName.trim() ? 'pointer' : 'not-allowed', opacity: wfName.trim() ? 1 : 0.4, letterSpacing: '0.06em' }}
+              >Save</button>
+              <button
+                onClick={() => setSaveModalOpen(false)}
+                style={{ background: '#111318', border: '1px solid #2a2a4a', borderRadius: 6, color: '#6b7280', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", padding: '9px 16px', cursor: 'pointer', letterSpacing: '0.06em' }}
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ CONTEXT MENU ═══════════════════════════════════════════════════ */}
+      {ctxMenu && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1002 }}
+          onClick={closeCtxMenu}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div
+            style={{ position: 'absolute', top: ctxMenu.y, left: ctxMenu.x, background: '#111318', border: '1px solid #2a2a4a', borderRadius: 8, padding: '6px 0', minWidth: 170, boxShadow: '0 8px 32px #000a', zIndex: 1003 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button onClick={ctxConfigure} style={{ display: 'block', width: '100%', background: 'none', border: 'none', color: '#c9d1d9', fontSize: 10, fontFamily: "'JetBrains Mono', monospace", padding: '8px 14px', textAlign: 'left', cursor: 'pointer', letterSpacing: '0.04em' }}>
+              ⚙ Configure
+            </button>
+            <button onClick={ctxDisconnect} style={{ display: 'block', width: '100%', background: 'none', border: 'none', color: '#6b7280', fontSize: 10, fontFamily: "'JetBrains Mono', monospace", padding: '8px 14px', textAlign: 'left', cursor: 'pointer', letterSpacing: '0.04em' }}>
+              ✂ Disconnect all
+            </button>
+            <div style={{ height: 1, background: '#1f2937', margin: '4px 0' }} />
+            <button onClick={ctxRemoveNode} style={{ display: 'block', width: '100%', background: 'none', border: 'none', color: '#ef4444', fontSize: 10, fontFamily: "'JetBrains Mono', monospace", padding: '8px 14px', textAlign: 'left', cursor: 'pointer', letterSpacing: '0.04em' }}>
+              ✕ Remove from canvas
+            </button>
           </div>
         </div>
       )}
