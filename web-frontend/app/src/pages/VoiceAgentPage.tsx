@@ -881,6 +881,10 @@ function VoiceAgentPageInner() {
   const [modalInputs,       setModalInputs]        = useState<Record<string, string>>({})
   const rfInstance = useReactFlow()
 
+  // ── React Flow ────────────────────────────────────────────────────────────
+  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([])
+  const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([])
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -1035,10 +1039,6 @@ function VoiceAgentPageInner() {
     }
     go(); const id = setInterval(go, 8000); return () => clearInterval(id)
   }, [])
-
-  // ── React Flow ────────────────────────────────────────────────────────────
-  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([])
-  const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([])
 
   const onConnect = useCallback(
     (params: Connection) => setRfEdges((eds: Edge[]) => addEdge(params, eds)),
