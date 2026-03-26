@@ -312,20 +312,16 @@ async def livekit_token(request: Request):
 # -- Text chat with memory -----------------------------------------------------
 @app.post("/api/openclaw/chat")
 async def proxy_openclaw_chat(request: Request):
-        body = await request.json()
+    body = await request.json()
         messages = body.get("messages", [])
         last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         try:
-                reply = await call_openclaw_llm(last_user)
-                if last_user and reply:
-                    asyncio.create_task(save_chat_summary(last_user, reply))
+            reply = await call_openclaw_llm(last_user)
+            if last_user and reply:
+                asyncio.create_task(save_chat_summary(last_user, reply))
             return JSONResponse(content={"reply": reply})
         except Exception as e:
             return JSONResponse(content={"error": str(e)}, status_code=500)
-
-# -- Task endpoints ------------------------------------------------------------
-@app.get("/api/tasks")
-async def get_tasks():
     return JSONResponse(content=_tasks)
 
 @app.post("/api/tasks")
