@@ -312,34 +312,16 @@ async def livekit_token(request: Request):
 # -- Text chat with memory -----------------------------------------------------
 @app.post("/api/openclaw/chat")
 async def proxy_openclaw_chat(request: Request):
-    body = await request.json()
+        body = await request.json()
     messages = body.get("messages", [])
-    memory_context = await load_memory()
-    system_msg = {"role": "system", "content": BASE_INSTRUCTIONS + "\n\n--- YOUR MEMORY FILES ---\n\n" + memory_context}
-    full_messages = [system_msg] + messages
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        try:
-            resp = await client.post(
-                f"{OPENCLAW_API_BASE}/chat/completions",
-                json={"model": "openclaw", "messages": full_messages},
-                headers={"Content-Type": "application/json", "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}"},
-            )
-            raw_text = resp.text
-            if not raw_text.strip():
-                return JSONResponse(content={"error": "Empty response from OpenClaw"}, status_code=502)
-            try:
-                data = resp.json()
-            except Exception:
-                return JSONResponse(content={"error": f"Non-JSON response: {raw_text[:200]}"}, status_code=502)
-            if resp.status_code != 200:
-                return JSONResponse(content=data, status_code=resp.status_code)
-            reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if reply and messages:
-                last_user_msg = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
-                asyncio.create_task(save_chat_summary(last_user_msg, reply))
-            return JSONResponse(content={"reply": reply})
-        except Exception as e:
-            return JSONResponse(content={"error": str(e)}, status_code=500)
+    last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+    try:
+        reply = await call_openclaw_llm(last_user)
+        if last_user and reply:
+            asyncio.create_task(save_chat_summary(last_user, reply))
+        return JSONResponse(content={"reply": reply})
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 # -- Task endpoints ------------------------------------------------------------
 @app.get("/api/tasks")
