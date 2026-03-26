@@ -63,6 +63,7 @@ jobs_store:       dict[str, dict] = {}
 tree_nodes_store: dict[str, dict] = {}
 skills_store:     dict[str, dict] = {}
 outputs_store:    dict[str, dict] = {}
+activity_log:     list[dict]      = []
 
 # Telegram counter — incremented by webhook
 telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karenkaty_bot"}
@@ -71,6 +72,22 @@ telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karenkat
 
 _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL | re.IGNORECASE)
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+_ACTION_STATUS_MAP = {"POST": "created", "PATCH": "updated", "DELETE": "deleted"}
+
+
+def _log_activity(action_type: str, label: str, status: str = "action") -> None:
+    """Append an entry to the activity log (capped at 50 items)."""
+    entry: dict = {
+        "id":          str(uuid.uuid4()),
+        "timestamp":   time.time(),
+        "action_type": action_type,
+        "label":       label[:60],
+        "status":      status,
+    }
+    activity_log.append(entry)
+    if len(activity_log) > 50:
+        activity_log.pop(0)
 
 
 def _execute_action(raw: str) -> str:
@@ -89,6 +106,13 @@ def _execute_action(raw: str) -> str:
         return f"⚠ Malformed endpoint: {endpoint!r}"
     method = parts[0].upper()
     path   = parts[1]
+
+    print('[ACTION FIRED]')
+    _log_activity(
+        action_type=f"{method} {path}",
+        label=body.get("title") or body.get("name") or body.get("label") or path,
+        status=_ACTION_STATUS_MAP.get(method, "action"),
+    )
 
     # ── POST /api/tasks ──────────────────────────────────────────────────────
     if method == "POST" and path == "/api/tasks":
@@ -233,7 +257,6 @@ def _execute_action(raw: str) -> str:
             "created_at": now,
         }
         outputs_store[output_id] = output
-        print('[ACTION FIRED]')
         return f"✅ Created output: {output['title']} (id: {output_id})"
 
     return f"⚠ Unknown endpoint: {endpoint}"
@@ -254,7 +277,6 @@ def execute_actions(text: str) -> tuple[str, list[str]]:
     # Primary path: <action>…</action> tags
     actions = _ACTION_RE.findall(text)
     for raw in actions:
-        print('[ACTION FIRED]')
         result = _execute_action(raw)
         results.append(result)
 
@@ -265,7 +287,6 @@ def execute_actions(text: str) -> tuple[str, list[str]]:
         try:
             data = json.loads(raw)
             if isinstance(data, dict) and ("title" in data or "endpoint" in data):
-                print('[ACTION FIRED]')
                 result = _execute_action(raw)
                 results.append(result)
                 fallback_blocks.append(m.group(0))
@@ -809,7 +830,11 @@ async def download_output(output_id: str):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
-# ─── Memory files ─────────────────────────────────────────────────────────────
+# ─── Activity log ─────────────────────────────────────────────────────────────
+
+@app.get("/api/activity")
+async def get_activity():
+    return list(reversed(activity_log))[:20]
 
 MEMORY_FILES = {"profile", "tasks", "conversations", "automations"}
 
