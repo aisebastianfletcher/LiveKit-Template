@@ -423,7 +423,7 @@ const OpenClawNode = memo(({ data }: NodeProps) => {
         }}>⬡</div>
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 700, fontSize: 15, letterSpacing: '0.1em', color: online ? '#fbbf24' : '#71717a', lineHeight: 1 }}>
-            OPENCLAW
+            KATY
           </div>
           <div style={{ ...nSub, marginTop: 3 }}>Brain · Router · Orchestrator</div>
         </div>
@@ -826,7 +826,7 @@ export default function VoiceAgentPage() {
 
           {/* Chat section */}
           <div style={{ ...css.section, flex: 1, minHeight: 0 }}>
-            <SectionLabel>CHAT · OPENCLAW</SectionLabel>
+            <SectionLabel>CHAT · KATY</SectionLabel>
             <div style={css.chatScroll}>
               {messages.length === 0 && (
                 <div style={{ fontSize: 10, color: '#30363d', textAlign: 'center', marginTop: 14, fontStyle: 'italic' }}>
