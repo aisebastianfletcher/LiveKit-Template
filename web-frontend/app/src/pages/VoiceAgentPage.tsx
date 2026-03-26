@@ -758,7 +758,11 @@ export default function VoiceAgentPage() {
       voiceConnected: isConnected,
       chatMsgCount: messages.length,
     })
-    setRfNodes(nodes)
+    // Preserve positions the user has dragged to; only use built positions for new nodes
+    setRfNodes((prev) => {
+      const posMap = new Map(prev.map((n) => [n.id, n.position]))
+      return nodes.map((n) => posMap.has(n.id) ? { ...n, position: posMap.get(n.id)! } : n)
+    })
     setRfEdges(edges)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphKey])
@@ -922,13 +926,7 @@ export default function VoiceAgentPage() {
               />
             </ReactFlow>
 
-            {tasks.length === 0 && agents.length === 0 && treeNodes.length === 0 && (
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, pointerEvents: 'none', zIndex: 1 }}>
-                <div style={{ fontSize: 64, color: '#111827', lineHeight: 1 }}>⬡</div>
-                <div style={{ fontSize: 10, color: '#1f2937', letterSpacing: '0.12em' }}>Waiting for OpenClaw activity…</div>
-                <div style={{ fontSize: 9, color: '#111827', letterSpacing: '0.1em' }}>tree updates every 3–10 s</div>
-              </div>
-            )}
+
           </div>
         </main>
       </div>
