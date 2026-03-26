@@ -17,7 +17,9 @@ New in v2:
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import time
 import uuid
 from typing import Any, Literal, Optional
@@ -62,6 +64,176 @@ tree_nodes_store: dict[str, dict] = {}
 
 # Telegram counter — incremented by webhook
 telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karenkaty_bot"}
+
+# ─── Internal action executor ─────────────────────────────────────────────────
+
+_ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL | re.IGNORECASE)
+
+
+def _execute_action(raw: str) -> str:
+    """Execute a single JSON action dict against the in-memory stores.
+    Returns a human-readable result string."""
+    try:
+        data = json.loads(raw.strip())
+    except json.JSONDecodeError as exc:
+        return f"⚠ Invalid action JSON: {exc}"
+
+    endpoint: str = data.get("endpoint", "")
+    body: dict = data.get("body", {})
+
+    parts  = endpoint.split()
+    if len(parts) < 2:
+        return f"⚠ Malformed endpoint: {endpoint!r}"
+    method = parts[0].upper()
+    path   = parts[1]
+
+    # ── POST /api/tasks ──────────────────────────────────────────────────────
+    if method == "POST" and path == "/api/tasks":
+        task_id = str(uuid.uuid4())
+        now = time.time()
+        task = {
+            "id":         task_id,
+            "title":      body.get("title", "Untitled task")[:60],
+            "status":     body.get("status", "pending"),
+            "created_at": now,
+            "updated_at": now,
+            "source":     body.get("source", "openclaw"),
+            "category":   body.get("category", "short_term"),
+        }
+        tasks_store[task_id] = task
+        return f"✅ Created task: {task['title']} (id: {task_id})"
+
+    # ── PATCH /api/tasks/{id} ────────────────────────────────────────────────
+    if method == "PATCH" and re.match(r"^/api/tasks/[^/]+$", path):
+        task_id = path.split("/")[-1]
+        if task_id not in tasks_store:
+            return f"⚠ Task not found: {task_id}"
+        allowed = {k: v for k, v in body.items() if k in {"title", "status", "category", "source"}}
+        tasks_store[task_id].update({**allowed, "updated_at": time.time()})
+        return f"✅ Updated task {task_id}: {allowed}"
+
+    # ── DELETE /api/tasks/{id} ───────────────────────────────────────────────
+    if method == "DELETE" and re.match(r"^/api/tasks/[^/]+$", path):
+        task_id = path.split("/")[-1]
+        if task_id in tasks_store:
+            del tasks_store[task_id]
+            return f"✅ Deleted task {task_id}"
+        return f"⚠ Task not found: {task_id}"
+
+    # ── POST /api/agents ─────────────────────────────────────────────────────
+    if method == "POST" and path == "/api/agents":
+        agent_id = str(uuid.uuid4())
+        now = time.time()
+        agent = {
+            "id":         agent_id,
+            "name":       body.get("name", "agent")[:60],
+            "type":       body.get("type", "custom"),
+            "status":     body.get("status", "active"),
+            "created_at": now,
+        }
+        agents_store[agent_id] = agent
+        return f"✅ Created agent: {agent['name']} (id: {agent_id})"
+
+    # ── PATCH /api/agents/{id} ───────────────────────────────────────────────
+    if method == "PATCH" and re.match(r"^/api/agents/[^/]+$", path):
+        agent_id = path.split("/")[-1]
+        if agent_id not in agents_store:
+            return f"⚠ Agent not found: {agent_id}"
+        allowed = {k: v for k, v in body.items() if k in {"name", "status"}}
+        agents_store[agent_id].update({**allowed, "updated_at": time.time()})
+        return f"✅ Updated agent {agent_id}: {allowed}"
+
+    # ── DELETE /api/agents/{id} ──────────────────────────────────────────────
+    if method == "DELETE" and re.match(r"^/api/agents/[^/]+$", path):
+        agent_id = path.split("/")[-1]
+        if agent_id in agents_store:
+            del agents_store[agent_id]
+            return f"✅ Deleted agent {agent_id}"
+        return f"⚠ Agent not found: {agent_id}"
+
+    # ── POST /api/jobs/queue ─────────────────────────────────────────────────
+    if method == "POST" and path == "/api/jobs/queue":
+        job_id = str(uuid.uuid4())
+        now = time.time()
+        job = {
+            "id":         job_id,
+            "name":       body.get("name", "job")[:60],
+            "status":     body.get("status", "queued"),
+            "schedule":   body.get("schedule"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        jobs_store[job_id] = job
+        return f"✅ Created job: {job['name']} (id: {job_id})"
+
+    # ── PATCH /api/jobs/queue/{id} ───────────────────────────────────────────
+    if method == "PATCH" and re.match(r"^/api/jobs/queue/[^/]+$", path):
+        job_id = path.split("/")[-1]
+        if job_id not in jobs_store:
+            return f"⚠ Job not found: {job_id}"
+        allowed = {k: v for k, v in body.items() if k in {"name", "status", "schedule"}}
+        jobs_store[job_id].update({**allowed, "updated_at": time.time()})
+        return f"✅ Updated job {job_id}: {allowed}"
+
+    # ── DELETE /api/jobs/queue/{id} ──────────────────────────────────────────
+    if method == "DELETE" and re.match(r"^/api/jobs/queue/[^/]+$", path):
+        job_id = path.split("/")[-1]
+        if job_id in jobs_store:
+            del jobs_store[job_id]
+            return f"✅ Deleted job {job_id}"
+        return f"⚠ Job not found: {job_id}"
+
+    # ── POST /api/tree/nodes ─────────────────────────────────────────────────
+    if method == "POST" and path == "/api/tree/nodes":
+        node_id = str(uuid.uuid4())
+        now = time.time()
+        node = {
+            "id":         node_id,
+            "parent_id":  body.get("parent_id"),
+            "label":      body.get("label", "node")[:60],
+            "status":     body.get("status"),
+            "type":       body.get("type", "custom"),
+            "metadata":   body.get("metadata", {}),
+            "created_at": now,
+            "updated_at": now,
+        }
+        tree_nodes_store[node_id] = node
+        return f"✅ Created tree node: {node['label']} (id: {node_id})"
+
+    # ── PATCH /api/tree/nodes/{id} ───────────────────────────────────────────
+    if method == "PATCH" and re.match(r"^/api/tree/nodes/[^/]+$", path):
+        node_id = path.split("/")[-1]
+        if node_id not in tree_nodes_store:
+            return f"⚠ Tree node not found: {node_id}"
+        allowed = {k: v for k, v in body.items() if k in {"parent_id", "label", "status", "type", "metadata"}}
+        tree_nodes_store[node_id].update({**allowed, "updated_at": time.time()})
+        return f"✅ Updated tree node {node_id}: {allowed}"
+
+    # ── DELETE /api/tree/nodes/{id} ──────────────────────────────────────────
+    if method == "DELETE" and re.match(r"^/api/tree/nodes/[^/]+$", path):
+        node_id = path.split("/")[-1]
+        if node_id in tree_nodes_store:
+            del tree_nodes_store[node_id]
+            return f"✅ Deleted tree node {node_id}"
+        return f"⚠ Tree node not found: {node_id}"
+
+    return f"⚠ Unknown endpoint: {endpoint}"
+
+
+def execute_actions(text: str) -> tuple[str, list[str]]:
+    """Parse and execute all <action>…</action> blocks in *text*.
+
+    Returns:
+        cleaned_text  — response with all <action> tags stripped
+        results       — list of human-readable result strings, one per action
+    """
+    results: list[str] = []
+    actions = _ACTION_RE.findall(text)
+    for raw in actions:
+        result = _execute_action(raw)
+        results.append(result)
+    cleaned = _ACTION_RE.sub("", text).strip()
+    return cleaned, results
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 
@@ -263,16 +435,65 @@ GET /api/memory/automations
 → Returns { file, path, content, preview, updated_at, size }
 
 ─────────────────────────────────────────────────────────
+## HOW TO CALL APIS — CRITICAL, READ CAREFULLY
+─────────────────────────────────────────────────────────
+
+You CANNOT make HTTP requests yourself. Instead, embed API calls as <action> tags
+anywhere in your response text. The system will execute them server-side BEFORE
+sending your reply to the user.
+
+### Format
+<action>{"endpoint": "METHOD /api/path", "body": {...}}</action>
+
+For PATCH and DELETE that need an id, put it in the path:
+<action>{"endpoint": "PATCH /api/tasks/TASK_ID_HERE", "body": {"status": "in_progress"}}</action>
+
+You cannot know the generated UUID in advance for PATCH/DELETE immediately after POST,
+so chain actions only when you already have a real id.
+
+### Examples
+
+Create a task:
+<action>{"endpoint": "POST /api/tasks", "body": {"title": "Write poem about stars", "status": "pending", "category": "short_term"}}</action>
+
+Create a tree node:
+<action>{"endpoint": "POST /api/tree/nodes", "body": {"parent_id": "openclaw", "label": "Thinking…", "status": "thinking", "type": "thought"}}</action>
+
+Create an agent:
+<action>{"endpoint": "POST /api/agents", "body": {"name": "researcher-1", "type": "researcher", "status": "active"}}</action>
+
+Create a job:
+<action>{"endpoint": "POST /api/jobs/queue", "body": {"name": "Daily report generation", "status": "queued"}}</action>
+
+### Supported endpoints
+POST   /api/tasks
+PATCH  /api/tasks/{id}
+DELETE /api/tasks/{id}
+POST   /api/agents
+PATCH  /api/agents/{id}
+DELETE /api/agents/{id}
+POST   /api/jobs/queue
+PATCH  /api/jobs/queue/{id}
+DELETE /api/jobs/queue/{id}
+POST   /api/tree/nodes
+PATCH  /api/tree/nodes/{id}
+DELETE /api/tree/nodes/{id}
+
+─────────────────────────────────────────────────────────
 ## Workflow Rules
 ─────────────────────────────────────────────────────────
-1. CREATE a task card BEFORE starting work (status: "pending").
-2. Immediately PATCH it to "in_progress" when you begin.
-3. PATCH to "completed" when done.
+1. ALWAYS create a task when the user asks you to do something — even creative tasks.
+2. Create the task with status "in_progress" directly — you cannot know the UUID before
+   it is created, so do not try to POST then immediately PATCH to in_progress.
+3. PATCH to "completed" once the work described is done (you may do this in a follow-up
+   message if needed, using the task id from the ✅ confirmation in your context).
 4. DELETE tasks that are cancelled or no longer relevant.
 5. Use custom tree nodes to show sub-steps or decision points in real time.
 6. Keep labels short — they are node labels in the visual tree (≤60 chars).
 7. Do not let completed tasks accumulate — clean them up.
-8. When spawning an agent, always POST to /api/agents so it appears in the tree.
+8. When spawning an agent, always emit a POST /api/agents action so it appears in the tree.
+9. NEVER show raw JSON in your reply — use <action> tags only, they are stripped automatically.
+10. You may chain multiple <action> tags in a single response (they execute left to right).
 """
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -521,6 +742,8 @@ async def openclaw_chat(body: ChatRequest):
         {"role": "user", "content": body.message}
     ]
 
+    raw_text: str = ""
+
     # Try OpenClaw gateway first
     if OPENCLAW_API_URL and OPENCLAW_API_KEY:
         try:
@@ -536,64 +759,77 @@ async def openclaw_chat(body: ChatRequest):
                 )
                 r.raise_for_status()
                 data = r.json()
-                return {"response": data.get("response", data.get("message", str(data)))}
+                raw_text = data.get("response", data.get("message", str(data)))
         except Exception as exc:
             # Fall through to direct Anthropic
             print(f"[openclaw gateway error] {exc}")
 
-    if not ANTHROPIC_API_KEY:
-        return {
-            "response": (
-                "[OpenClaw offline — set ANTHROPIC_API_KEY or OPENCLAW_API_URL + OPENCLAW_API_KEY]"
-            )
-        }
+    if not raw_text:
+        if not ANTHROPIC_API_KEY:
+            return {
+                "response": (
+                    "[OpenClaw offline — set ANTHROPIC_API_KEY or OPENCLAW_API_URL + OPENCLAW_API_KEY]"
+                )
+            }
 
-    # Try OpenRouter first (ANTHROPIC_API_KEY is loaded from OPENROUTER_API_KEY env var; key often starts with 'sk-or-')
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {ANTHROPIC_API_KEY}",
-                    "HTTP-Referer":  "https://gitwix.agent",
-                    "content-type":  "application/json",
-                },
-                json={
-                    "model":      CLAUDE_MODEL,
-                    "max_tokens": 1024,
-                    "messages":   [{"role": "system", "content": BASE_INSTRUCTIONS}] + messages,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            return {"response": data["choices"][0]["message"]["content"]}
-    except Exception as exc:
-        print(f"[openrouter error] {exc}")
+        # Try OpenRouter first (ANTHROPIC_API_KEY is loaded from OPENROUTER_API_KEY env var; key often starts with 'sk-or-')
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {ANTHROPIC_API_KEY}",
+                        "HTTP-Referer":  "https://gitwix.agent",
+                        "content-type":  "application/json",
+                    },
+                    json={
+                        "model":      CLAUDE_MODEL,
+                        "max_tokens": 1024,
+                        "messages":   [{"role": "system", "content": BASE_INSTRUCTIONS}] + messages,
+                    },
+                )
+                r.raise_for_status()
+                data = r.json()
+                raw_text = data["choices"][0]["message"]["content"]
+        except Exception as exc:
+            print(f"[openrouter error] {exc}")
 
-    # Fallback: direct Anthropic API (for native Anthropic keys)
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key":         ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type":      "application/json",
-                },
-                json={
-                    "model":      CLAUDE_MODEL,
-                    "max_tokens": 1024,
-                    "system":     BASE_INSTRUCTIONS,
-                    "messages":   messages,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            text = data["content"][0]["text"] if data.get("content") else ""
-            return {"response": text}
-    except Exception as exc:
-        print(f"[anthropic error] {exc}")
-        raise HTTPException(status_code=502, detail=str(exc))
+    if not raw_text:
+        # Fallback: direct Anthropic API (for native Anthropic keys)
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key":         ANTHROPIC_API_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "content-type":      "application/json",
+                    },
+                    json={
+                        "model":      CLAUDE_MODEL,
+                        "max_tokens": 1024,
+                        "system":     BASE_INSTRUCTIONS,
+                        "messages":   messages,
+                    },
+                )
+                r.raise_for_status()
+                data = r.json()
+                raw_text = data["content"][0]["text"] if data.get("content") else ""
+        except Exception as exc:
+            print(f"[anthropic error] {exc}")
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    # Execute any <action>…</action> blocks embedded by the AI
+    cleaned_text, action_results = execute_actions(raw_text)
+
+    # Append a compact summary of executed actions (if any)
+    if action_results:
+        summary = "\n".join(action_results)
+        response_text = f"{cleaned_text}\n\n{summary}".strip()
+    else:
+        response_text = cleaned_text
+
+    return {"response": response_text}
 
 # ─── LiveKit token ────────────────────────────────────────────────────────────
 
