@@ -3,7 +3,7 @@ FROM node:22-slim AS frontend-build
 
 WORKDIR /build
 COPY app/package.json app/package-lock.json ./
-RUN npm ci
+RUN npm install
 COPY app/ ./
 RUN npm run build -- --outDir /dist
 
