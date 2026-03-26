@@ -1160,6 +1160,8 @@ function VoiceAgentPageInner() {
       // Check if both endpoints are skill nodes
       const srcIsSkill = rfNodes.some((n) => n.id === params.source && n.type === 'skillNode')
       const tgtIsSkill = rfNodes.some((n) => n.id === params.target && n.type === 'skillNode')
+      // Use OR: any edge involving a skill node is stored in canvasSkillEdges so it
+      // survives graph rebuilds (e.g. skill → openclaw or skill → skill both need tracking)
       if (srcIsSkill || tgtIsSkill) {
         const baseEdge = addEdge(params, [])
         if (baseEdge.length > 0) {
