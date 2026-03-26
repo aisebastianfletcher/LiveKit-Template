@@ -992,14 +992,16 @@ function VoiceAgentPageInner() {
       },
     }
     setCanvasSkillNodes((prev) => [...prev, newNode])
-    // Notify OpenClaw about the new skill
+    // Notify OpenClaw about the new skill; errors are non-critical so swallow silently
     void fetch('/api/openclaw/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: `[SKILL ADDED] I've added ${skill.name} to my workflow canvas. It's ready to be connected.` }),
     }).then((r) => r.json()).then((d) => {
       setMessages((p) => [...p, { role: 'assistant', text: d.response ?? d.message ?? '✅ Skill added.', timestamp: new Date() }])
-    }).catch(() => {})
+    }).catch(() => {
+      setMessages((p) => [...p, { role: 'assistant', text: `✅ ${skill.name} added to canvas.`, timestamp: new Date() }])
+    })
   }, [rfInstance, setCanvasSkillNodes, setMessages])
 
   const filteredSkills = useMemo(() => {
@@ -1036,8 +1038,8 @@ function VoiceAgentPageInner() {
 
   const activateWorkflow = useCallback(async (wf: Workflow) => {
     const skillNames = wf.skillNodes.map((n) => n.data.name as string).join(' -> ')
+    const newStatus = wf.status === 'active' ? 'paused' : 'active'
     const msg = `[WORKFLOW ACTIVATED] Workflow '${wf.name}': Skills chain: ${skillNames}. Description: ${wf.description}. Please acknowledge and begin monitoring these integrations.`
-    setWorkflows((prev) => prev.map((w) => w.id === wf.id ? { ...w, status: w.status === 'active' ? 'paused' : 'active' } : w))
     try {
       const res = await fetch('/api/openclaw/chat', {
         method: 'POST',
@@ -1045,8 +1047,11 @@ function VoiceAgentPageInner() {
         body: JSON.stringify({ message: msg }),
       })
       const d = await res.json()
+      setWorkflows((prev) => prev.map((w) => w.id === wf.id ? { ...w, status: newStatus } : w))
       setMessages((p) => [...p, { role: 'assistant', text: d.response ?? d.message ?? '✅ Workflow activated.', timestamp: new Date() }])
-    } catch {}
+    } catch {
+      setMessages((p) => [...p, { role: 'assistant', text: '⚠ Could not contact OpenClaw. Workflow status unchanged.', timestamp: new Date() }])
+    }
   }, [setMessages])
 
   const clearCanvas = useCallback(() => {
@@ -1158,11 +1163,13 @@ function VoiceAgentPageInner() {
       if (srcIsSkill || tgtIsSkill) {
         const baseEdge = addEdge(params, [])
         if (baseEdge.length > 0) {
-          const newEdge: Edge = Object.assign({}, baseEdge[0], {
+          const first = baseEdge[0] as Edge
+          const newEdge: Edge = {
+            ...first,
             type: 'smoothstep',
             style: { stroke: '#6d28d9', strokeWidth: 1.5, strokeDasharray: '5 3' },
             label: (srcIsSkill && tgtIsSkill) ? 'data' : undefined,
-          })
+          }
           setCanvasSkillEdges((eds) => [...eds, newEdge])
         }
       } else {
