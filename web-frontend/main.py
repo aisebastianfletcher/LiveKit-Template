@@ -548,25 +548,52 @@ async def openclaw_chat(body: ChatRequest):
             )
         }
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        r = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key":         ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
-            },
-            json={
-                "model":      CLAUDE_MODEL,
-                "max_tokens": 1024,
-                "system":     BASE_INSTRUCTIONS,
-                "messages":   messages,
-            },
-        )
-        r.raise_for_status()
-        data = r.json()
-        text = data["content"][0]["text"] if data.get("content") else ""
-        return {"response": text}
+    # Try OpenRouter first (ANTHROPIC_API_KEY is loaded from OPENROUTER_API_KEY env var; key often starts with 'sk-or-')
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {ANTHROPIC_API_KEY}",
+                    "HTTP-Referer":  "https://gitwix.agent",
+                    "content-type":  "application/json",
+                },
+                json={
+                    "model":      CLAUDE_MODEL,
+                    "max_tokens": 1024,
+                    "messages":   [{"role": "system", "content": BASE_INSTRUCTIONS}] + messages,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            return {"response": data["choices"][0]["message"]["content"]}
+    except Exception as exc:
+        print(f"[openrouter error] {exc}")
+
+    # Fallback: direct Anthropic API (for native Anthropic keys)
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key":         ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type":      "application/json",
+                },
+                json={
+                    "model":      CLAUDE_MODEL,
+                    "max_tokens": 1024,
+                    "system":     BASE_INSTRUCTIONS,
+                    "messages":   messages,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            text = data["content"][0]["text"] if data.get("content") else ""
+            return {"response": text}
+    except Exception as exc:
+        print(f"[anthropic error] {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
 
 # ─── LiveKit token ────────────────────────────────────────────────────────────
 
