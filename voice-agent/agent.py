@@ -3,8 +3,10 @@ OpenClaw Voice Agent
 Fixes applied:
   - Fix 5: After session ends, extract profile facts + new tasks from transcript
            and write them back to memory/profile.md and memory/tasks.md
+  - Fix 6: LLM gateway probe at session start — falls back to OpenAI direct
+           if the OpenClaw gateway returns non-200 or times out.
+  - Fix 7: Corrected indentation on on_disconnect / _handle_disconnect.
 """
-# Trigger redeploy with async disconnect fix v2
 
 import logging
 import os
@@ -23,10 +25,10 @@ logging.basicConfig(level=logging.INFO)
 server = AgentServer()
 
 # ── Environment ────────────────────────────────────────────────────────────────
-GITHUB_TOKEN       = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO        = os.environ.get("GITHUB_REPO", "aisebastianfletcher/LiveKit-Template")
-GITHUB_BRANCH      = "main"
-MEMORY_FILES       = [
+GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO   = os.environ.get("GITHUB_REPO", "aisebastianfletcher/LiveKit-Template")
+GITHUB_BRANCH = "main"
+MEMORY_FILES  = [
     "memory/profile.md",
     "memory/tasks.md",
     "memory/conversations.md",
@@ -36,6 +38,9 @@ MEMORY_FILES       = [
 OPENCLAW_BASE_URL      = os.environ.get("OPENCLAW_BASE_URL", "https://openclaw-production-058c.up.railway.app")
 OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 OPENCLAW_API_BASE      = f"{OPENCLAW_BASE_URL.rstrip('/')}/v1"
+
+OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY", "")
+FALLBACK_MODEL  = os.environ.get("OPENAI_FALLBACK_MODEL", "gpt-4o-mini")
 
 # ── Shared prompt ──────────────────────────────────────────────────────────────
 BASE_INSTRUCTIONS = """You are OpenClaw, a stateful voice AI assistant with persistent memory.
@@ -169,7 +174,6 @@ async def extract_facts_from_transcript(transcript: str) -> dict:
         data = resp.json()
         raw = data["choices"][0]["message"]["content"].strip()
 
-        # Strip markdown fences in case the model adds them anyway
         if raw.startswith("```"):
             lines = raw.splitlines()
             raw = "\n".join(
@@ -193,13 +197,12 @@ async def update_profile_from_facts(facts: dict) -> None:
     key_facts   = facts.get("key_facts") or []
 
     if not name and not preferences and not key_facts:
-        return  # nothing to write
+        return
 
     profile = await read_github_file("memory/profile.md")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     changed: list[str] = []
 
-    # ── Name ──────────────────────────────────────────────────────────────────
     if name:
         if "Name: (learned from conversations)" in profile:
             profile = profile.replace(
@@ -208,10 +211,8 @@ async def update_profile_from_facts(facts: dict) -> None:
             )
             changed.append("name")
         elif f"Name: {name}" not in profile:
-            # Name is already set to something; don't overwrite
             pass
 
-    # ── Preferences ───────────────────────────────────────────────────────────
     if preferences:
         prefs_block = "\n".join(f"- {p}" for p in preferences)
         if "Preferences: (learned from conversations)" in profile:
@@ -224,7 +225,6 @@ async def update_profile_from_facts(facts: dict) -> None:
             profile += f"\n\n## Preferences (updated {now})\n{prefs_block}\n"
             changed.append("preferences")
 
-    # ── Key facts ─────────────────────────────────────────────────────────────
     if key_facts:
         facts_block = "\n".join(f"- {f}" for f in key_facts)
         if "(OpenClaw will populate this as it learns)" in profile:
@@ -237,7 +237,6 @@ async def update_profile_from_facts(facts: dict) -> None:
             profile += f"\n\n## Additional Facts (updated {now})\n{facts_block}\n"
             changed.append("key_facts")
 
-    # ── Timestamp ─────────────────────────────────────────────────────────────
     profile = profile.replace(
         "*Last updated: Not yet - OpenClaw will update this file automatically.*",
         f"*Last updated: {now}*",
@@ -260,7 +259,7 @@ async def update_profile_from_facts(facts: dict) -> None:
 
 
 async def update_tasks_from_facts(facts: dict) -> None:
-    """Append AI-extracted tasks to memory/tasks.md (human-readable section only)."""
+    """Append AI-extracted tasks to memory/tasks.md."""
     new_tasks = facts.get("new_tasks") or []
     if not new_tasks:
         return
@@ -285,6 +284,42 @@ async def update_tasks_from_facts(facts: dict) -> None:
     logger.info(f"[OPENCLAW] Added {len(new_tasks)} tasks to tasks.md")
 
 
+# ── Fix 6: Gateway health probe ───────────────────────────────────────────────
+async def probe_gateway() -> bool:
+    """
+    Send a minimal chat completion to the OpenClaw gateway.
+    Returns True if healthy, False if the fallback should be used.
+    Times out after 5 seconds so it doesn't delay session start noticeably.
+    """
+    if not OPENCLAW_GATEWAY_TOKEN:
+        logger.info("[OPENCLAW] No gateway token set — using OpenAI direct")
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{OPENCLAW_API_BASE}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENCLAW_GATEWAY_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "openclaw",
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 1,
+                },
+            )
+        if resp.status_code == 200:
+            logger.info("[OPENCLAW] Gateway probe: healthy ✓")
+            return True
+        logger.warning(
+            f"[OPENCLAW] Gateway probe returned {resp.status_code} — falling back to OpenAI"
+        )
+        return False
+    except Exception as e:
+        logger.warning(f"[OPENCLAW] Gateway probe failed ({e}) — falling back to OpenAI")
+        return False
+
+
 # ── VAD prewarm ───────────────────────────────────────────────────────────────
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -297,7 +332,26 @@ server.setup_fnc = prewarm
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     logger.info("[OPENCLAW] New voice session started")
-    logger.info(f"[OPENCLAW] Routing LLM through OpenClaw at {OPENCLAW_API_BASE}")
+
+    # ── Fix 6: probe gateway before creating session ──────────────────────────
+    gateway_healthy = await probe_gateway()
+
+    if gateway_healthy:
+        logger.info(f"[OPENCLAW] LLM → OpenClaw gateway ({OPENCLAW_API_BASE})")
+        llm = openai.LLM(
+            model="openclaw",
+            temperature=0.7,
+            base_url=OPENCLAW_API_BASE,
+            api_key=OPENCLAW_GATEWAY_TOKEN,
+        )
+    else:
+        logger.info(f"[OPENCLAW] LLM → OpenAI direct ({FALLBACK_MODEL})")
+        llm = openai.LLM(
+            model=FALLBACK_MODEL,
+            temperature=0.7,
+            api_key=OPENAI_API_KEY,
+            # base_url intentionally omitted → defaults to api.openai.com
+        )
 
     memory_context = await load_memory()
     logger.info(f"[OPENCLAW] Loaded {len(memory_context)} chars of memory")
@@ -312,10 +366,7 @@ async def entrypoint(ctx: JobContext):
         stt=openai.STT(model="whisper-1"),
         tts=openai.TTS(model="tts-1", voice="onyx"),
         vad=ctx.proc.userdata["vad"],
-        llm=openai.LLM(
-                        model="gpt-4o-mini",
-            temperature=0.7,
-        ),
+        llm=llm,
     )
 
     transcript_lines: list[str] = []
@@ -343,6 +394,7 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
+    # ── Fix 7: sync wrapper + correctly indented async body ───────────────────
     @ctx.room.on("disconnected")
     def on_disconnect():
         asyncio.create_task(_handle_disconnect())
@@ -351,12 +403,10 @@ async def entrypoint(ctx: JobContext):
         if not transcript_lines:
             return
 
-        logger.info(
-            f"[OPENCLAW] Session ended with {len(transcript_lines)} turns"
-        )
+        logger.info(f"[OPENCLAW] Session ended with {len(transcript_lines)} turns")
         transcript = "\n".join(transcript_lines[-30:])
 
-        # ── Step 1: Generate summary ──────────────────────────────────────────
+        # ── Step 1: Generate and save conversation summary ────────────────────
         summary: str = ""
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -390,7 +440,7 @@ async def entrypoint(ctx: JobContext):
             fallback = "\n".join(transcript_lines[-5:])
             await save_conversation_summary(f"(raw) {fallback}")
 
-        # ── Fix 5: Extract profile facts + tasks ─────────────────────────────
+        # ── Step 2: Extract and persist profile facts + tasks ─────────────────
         try:
             facts = await extract_facts_from_transcript(transcript)
             logger.info(f"[OPENCLAW] Extracted facts: {facts}")
