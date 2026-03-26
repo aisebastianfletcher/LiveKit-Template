@@ -394,7 +394,7 @@ const SKILLS_DATA: SkillDef[] = [
     ],
   },
   {
-    id: 'landing-page', name: 'Landing Page Builder', icon: '🚀', description: 'Create & A/B test landing pages', category: 'Content & Branding',
+    id: 'landing-page', name: 'Landing Page Builder', icon: '🚀', description: 'Create & A/B optimize landing pages', category: 'Content & Branding',
     requiredCredentials: [],
   },
 ]
