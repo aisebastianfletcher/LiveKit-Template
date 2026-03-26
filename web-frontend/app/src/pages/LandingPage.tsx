@@ -13,7 +13,7 @@ export default function LandingPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
             </svg>
           </div>
-          <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">Steve</h1>
+          <h1 className="text-3xl font-semibold text-white tracking-tight mb-2">Katy</h1>
           <p className="text-sm text-white/40">Gitwix Sales &amp; Outreach</p>
         </div>
 

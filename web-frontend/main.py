@@ -61,7 +61,7 @@ jobs_store:       dict[str, dict] = {}
 tree_nodes_store: dict[str, dict] = {}
 
 # Telegram counter — incremented by webhook
-telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karensteve_bot"}
+telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karenkaty_bot"}
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 
@@ -173,7 +173,7 @@ You coordinate tasks, manage automations, and help the user with development and
 
 ## Architecture
 The GITWIX Agent tree shows the live system architecture:
-  - Input channels: Telegram (@karensteve_bot), Voice (LiveKit), Text Chat
+  - Input channels: Telegram (@karenkaty_bot), Voice (LiveKit), Text Chat
   - OpenClaw (you): the central brain/router
   - Left branch: GitHub Memory files (profile.md, tasks.md, conversations.md, automations.md)
   - Right branch: Workspace (Tasks, Agents, Jobs)

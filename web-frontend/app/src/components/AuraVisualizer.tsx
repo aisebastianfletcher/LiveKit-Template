@@ -17,7 +17,7 @@ const TARGET_COLORS: Record<AuraMode, HSL> = {
 }
 
 const BASE_ALPHA: Record<AuraMode, number> = {
-  disconnected: 0.2,
+  disconnected: 0.45,
   idle: 0.5,
   'user-speaking': 0.85,
   'agent-speaking': 0.9,

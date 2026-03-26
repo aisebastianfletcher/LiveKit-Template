@@ -198,7 +198,7 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
     data: {
       icon:     '✈',
       label:    'Telegram',
-      subtitle: d.telegramStatus?.bot_username ?? '@karensteve_bot',
+      subtitle: d.telegramStatus?.bot_username ?? '@karenkaty_bot',
       status:   d.telegramStatus?.status ?? 'offline',
       metric:   `${d.telegramStatus?.message_count ?? 0} msgs`,
     },
@@ -802,7 +802,7 @@ export default function VoiceAgentPage() {
           {/* Voice section */}
           <div style={css.section}>
             <SectionLabel>VOICE · LIVEKIT</SectionLabel>
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '2px 0', height: 140 }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '2px 0', height: 140, width: '100%' }}>
               {/* AuraVisualizer: auraMode + rmsRef (no style prop) */}
               <AuraVisualizer
                 auraMode={auraMode}
