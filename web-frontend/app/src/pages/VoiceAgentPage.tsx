@@ -24,11 +24,13 @@ import {
 } from 'react'
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   addEdge,
   Handle,
   Position,
@@ -113,6 +115,195 @@ interface OpenClawStatus {
   gateway: boolean
 }
 
+// ─── Skills interfaces ────────────────────────────────────────────────────────
+
+interface CredentialField {
+  key: string
+  label: string
+  placeholder: string
+  type: 'text' | 'password'
+}
+
+interface SkillDef {
+  id: string
+  name: string
+  icon: string
+  description: string
+  category: string
+  requiredCredentials: CredentialField[]
+}
+
+interface SkillConfig {
+  configured: boolean
+  credentials: Record<string, string>
+}
+
+// ─── Skills data ──────────────────────────────────────────────────────────────
+
+const SKILLS_DATA: SkillDef[] = [
+  // CRM & Leads
+  {
+    id: 'hubspot', name: 'HubSpot CRM', icon: '🔶', description: 'Sync contacts, deals & pipelines', category: 'CRM & Leads',
+    requiredCredentials: [{ key: 'apiKey', label: 'API Key', placeholder: 'pat-na1-...', type: 'password' }],
+  },
+  {
+    id: 'salesforce', name: 'Salesforce', icon: '☁️', description: 'Enterprise CRM integration', category: 'CRM & Leads',
+    requiredCredentials: [
+      { key: 'clientId',     label: 'Client ID',       placeholder: '3MVG9...',       type: 'text'     },
+      { key: 'clientSecret', label: 'Client Secret',   placeholder: 'secret...',       type: 'password' },
+      { key: 'instanceUrl',  label: 'Instance URL',    placeholder: 'https://org.salesforce.com', type: 'text' },
+    ],
+  },
+  {
+    id: 'pipedrive', name: 'Pipedrive', icon: '🔵', description: 'Manage deals & contacts', category: 'CRM & Leads',
+    requiredCredentials: [{ key: 'apiToken', label: 'API Token', placeholder: 'abc123...', type: 'password' }],
+  },
+  {
+    id: 'lead-scorer', name: 'Lead Scorer', icon: '🎯', description: 'AI-powered lead scoring', category: 'CRM & Leads',
+    requiredCredentials: [],
+  },
+  {
+    id: 'contact-enrichment', name: 'Contact Enrichment', icon: '📊', description: 'Enrich leads with company data', category: 'CRM & Leads',
+    requiredCredentials: [{ key: 'apiKey', label: 'API Key (Clearbit/Apollo)', placeholder: 'sk-...', type: 'password' }],
+  },
+  // Email & Outreach
+  {
+    id: 'gmail', name: 'Gmail Integration', icon: '✉️', description: 'Send & read emails', category: 'Email & Outreach',
+    requiredCredentials: [
+      { key: 'clientId',     label: 'Client ID',     placeholder: '123...apps.googleusercontent.com', type: 'text'     },
+      { key: 'clientSecret', label: 'Client Secret', placeholder: 'GOCSPX-...',                       type: 'password' },
+    ],
+  },
+  {
+    id: 'outlook', name: 'Outlook/O365', icon: '📧', description: 'Microsoft email integration', category: 'Email & Outreach',
+    requiredCredentials: [
+      { key: 'clientId',     label: 'Client ID',     placeholder: 'azure-app-id',   type: 'text'     },
+      { key: 'clientSecret', label: 'Client Secret', placeholder: 'secret...',       type: 'password' },
+      { key: 'tenantId',     label: 'Tenant ID',     placeholder: 'tenant-guid',    type: 'text'     },
+    ],
+  },
+  {
+    id: 'sendgrid', name: 'SendGrid', icon: '📨', description: 'Transactional & bulk email', category: 'Email & Outreach',
+    requiredCredentials: [{ key: 'apiKey', label: 'API Key', placeholder: 'SG.xxx', type: 'password' }],
+  },
+  {
+    id: 'mailchimp', name: 'Mailchimp', icon: '🐒', description: 'Email marketing campaigns', category: 'Email & Outreach',
+    requiredCredentials: [
+      { key: 'apiKey',        label: 'API Key',       placeholder: 'abc123-us1', type: 'password' },
+      { key: 'serverPrefix',  label: 'Server Prefix', placeholder: 'us1',        type: 'text'     },
+    ],
+  },
+  {
+    id: 'cold-email', name: 'Cold Email Sequencer', icon: '📬', description: 'Automated outreach sequences', category: 'Email & Outreach',
+    requiredCredentials: [],
+  },
+  // Social Media
+  {
+    id: 'instagram', name: 'Instagram DM', icon: '📸', description: 'Auto-reply to comments & send DMs', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'accessToken',    label: 'Access Token',       placeholder: 'EAAG...', type: 'password' },
+      { key: 'igBusinessId',   label: 'IG Business ID',     placeholder: '1234567890', type: 'text'  },
+    ],
+  },
+  {
+    id: 'facebook', name: 'Facebook Pages', icon: '👤', description: 'Manage posts, comments & Messenger', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'pageAccessToken', label: 'Page Access Token', placeholder: 'EAABsb...', type: 'password' },
+      { key: 'pageId',          label: 'Page ID',           placeholder: '12345678',  type: 'text'     },
+    ],
+  },
+  {
+    id: 'linkedin', name: 'LinkedIn', icon: '💼', description: 'Post content & manage connections', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'accessToken',     label: 'Access Token',     placeholder: 'AQV...', type: 'password' },
+      { key: 'organizationId',  label: 'Organization ID',  placeholder: 'urn:li:organization:...', type: 'text' },
+    ],
+  },
+  {
+    id: 'twitter', name: 'Twitter/X', icon: '🐦', description: 'Post tweets & monitor mentions', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'apiKey',             label: 'API Key',              placeholder: 'abc...', type: 'password' },
+      { key: 'apiSecret',          label: 'API Secret',           placeholder: 'xyz...', type: 'password' },
+      { key: 'accessToken',        label: 'Access Token',         placeholder: '123-...', type: 'password' },
+      { key: 'accessTokenSecret',  label: 'Access Token Secret',  placeholder: 'sec...', type: 'password' },
+    ],
+  },
+  {
+    id: 'tiktok', name: 'TikTok', icon: '🎵', description: 'Post content & monitor comments', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'accessToken', label: 'Access Token', placeholder: 'act.xxx', type: 'password' },
+      { key: 'openId',      label: 'Open ID',      placeholder: 'user_open_id', type: 'text' },
+    ],
+  },
+  {
+    id: 'youtube', name: 'YouTube', icon: '▶️', description: 'Manage channel & reply to comments', category: 'Social Media',
+    requiredCredentials: [
+      { key: 'apiKey',    label: 'API Key',    placeholder: 'AIzaSy...', type: 'password' },
+      { key: 'channelId', label: 'Channel ID', placeholder: 'UC...',     type: 'text'     },
+    ],
+  },
+  // Content & Branding
+  {
+    id: 'brand-voice', name: 'Brand Voice AI', icon: '🎨', description: 'Learn your brand tone & style', category: 'Content & Branding',
+    requiredCredentials: [],
+  },
+  {
+    id: 'content-gen', name: 'Content Generator', icon: '✍️', description: 'Generate posts, captions & copy', category: 'Content & Branding',
+    requiredCredentials: [],
+  },
+  {
+    id: 'image-gen', name: 'Image Generator', icon: '🖼️', description: 'Create branded visuals', category: 'Content & Branding',
+    requiredCredentials: [{ key: 'apiKey', label: 'API Key (DALL-E/Midjourney)', placeholder: 'sk-...', type: 'password' }],
+  },
+  {
+    id: 'canva', name: 'Canva Integration', icon: '🖌️', description: 'Design graphics from templates', category: 'Content & Branding',
+    requiredCredentials: [{ key: 'apiKey', label: 'API Key', placeholder: 'canva-...', type: 'password' }],
+  },
+  // Documents & Data
+  {
+    id: 'gsheets', name: 'Google Sheets', icon: '📗', description: 'Read/write spreadsheet data', category: 'Documents & Data',
+    requiredCredentials: [
+      { key: 'clientId',     label: 'Client ID',     placeholder: '123...apps.googleusercontent.com', type: 'text'     },
+      { key: 'clientSecret', label: 'Client Secret', placeholder: 'GOCSPX-...',                       type: 'password' },
+    ],
+  },
+  {
+    id: 'gdocs', name: 'Google Docs', icon: '📄', description: 'Create & edit documents', category: 'Documents & Data',
+    requiredCredentials: [
+      { key: 'clientId',     label: 'Client ID',     placeholder: '123...apps.googleusercontent.com', type: 'text'     },
+      { key: 'clientSecret', label: 'Client Secret', placeholder: 'GOCSPX-...',                       type: 'password' },
+    ],
+  },
+  {
+    id: 'notion', name: 'Notion', icon: '📓', description: 'Manage databases & pages', category: 'Documents & Data',
+    requiredCredentials: [{ key: 'integrationToken', label: 'Integration Token', placeholder: 'secret_...', type: 'password' }],
+  },
+  {
+    id: 'airtable', name: 'Airtable', icon: '🗃️', description: 'Flexible database management', category: 'Documents & Data',
+    requiredCredentials: [
+      { key: 'apiKey',  label: 'API Key', placeholder: 'pat...', type: 'password' },
+      { key: 'baseId',  label: 'Base ID', placeholder: 'app...', type: 'text'     },
+    ],
+  },
+  // Automation & Analytics
+  {
+    id: 'webhook', name: 'Webhook Trigger', icon: '🔗', description: 'Custom webhook endpoints', category: 'Automation & Analytics',
+    requiredCredentials: [],
+  },
+  {
+    id: 'zapier', name: 'Zapier', icon: '⚡', description: 'Connect to 5000+ apps', category: 'Automation & Analytics',
+    requiredCredentials: [{ key: 'apiKey', label: 'API Key', placeholder: 'sk-...', type: 'password' }],
+  },
+  {
+    id: 'analytics', name: 'Analytics Dashboard', icon: '📈', description: 'Track leads, conversions & ROI', category: 'Automation & Analytics',
+    requiredCredentials: [],
+  },
+  {
+    id: 'calendar', name: 'Calendar Booking', icon: '📅', description: 'Schedule meetings automatically', category: 'Automation & Analytics',
+    requiredCredentials: [{ key: 'calendarApiKey', label: 'Calendar API Key (Cal.com/Calendly)', placeholder: 'cal_...', type: 'password' }],
+  },
+]
+
 // ─── Node size registry ───────────────────────────────────────────────────────
 
 const SZ = {
@@ -125,6 +316,7 @@ const SZ = {
   agentNode:       { w: 208, h: 72  },
   jobNode:         { w: 208, h: 72  },
   customNode:      { w: 200, h: 72  },
+  skillNode:       { w: 200, h: 72  },
 } as const
 
 // ─── Dagre layout ─────────────────────────────────────────────────────────────
@@ -582,6 +774,31 @@ const CustomNode = memo(({ data }: NodeProps) => {
 })
 CustomNode.displayName = 'CustomNode'
 
+const SkillNode = memo(({ data }: NodeProps) => {
+  const c = sc(data.status as string | undefined)
+  return (
+    <div style={{ ...nBase, width: SZ.skillNode.w, height: SZ.skillNode.h, background: '#0d1a2e', border: `1px solid ${c.border}`, boxShadow: `0 0 8px ${c.border}22` }}>
+      <Handle type="target" position={Position.Top}    style={INV} />
+      <Handle type="source" position={Position.Bottom} style={INV} />
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
+        <span style={{ fontSize: 16, lineHeight: 1.2, flexShrink: 0 }}>{data.icon as string}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ ...nTitle, color: '#60a5fa', fontSize: 10 }}>
+            {(data.name as string).length > MAX_SKILL_NAME_LEN ? (data.name as string).slice(0, MAX_SKILL_NAME_LEN) + '…' : (data.name as string)}
+          </div>
+          <div style={{ ...nSub, marginTop: 2 }}>{data.category as string}</div>
+        </div>
+        <Dot color={c.dot} pulse={data.status === 'active'} />
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
+        <span style={{ ...bdg, borderColor: '#1d4ed8', color: '#60a5fa' }}>skill</span>
+        <span style={{ ...bdg, borderColor: c.border, color: c.dot }}>{data.status as string}</span>
+      </div>
+    </div>
+  )
+})
+SkillNode.displayName = 'SkillNode'
+
 // ─── Node type registry (stable reference — defined outside component) ────────
 
 const nodeTypes = {
@@ -594,6 +811,18 @@ const nodeTypes = {
   agentNode:       AgentNode,
   jobNode:         JobNode,
   customNode:      CustomNode,
+  skillNode:       SkillNode,
+}
+
+// ─── Skills constants ──────────────────────────────────────────────────────────
+
+const MAX_SKILL_NAME_LEN = 22
+
+const skillCardNameStyle: CSSProperties = {
+  fontSize: 8, fontWeight: 600, color: '#c9d1d9', textAlign: 'center',
+  letterSpacing: '0.03em', lineHeight: 1.3, wordBreak: 'break-word',
+  width: '100%', overflow: 'hidden', display: '-webkit-box',
+  WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const,
 }
 
 // ─── Small presentational helpers ────────────────────────────────────────────
@@ -608,6 +837,14 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function VoiceAgentPage() {
+  return (
+    <ReactFlowProvider>
+      <VoiceAgentPageInner />
+    </ReactFlowProvider>
+  )
+}
+
+function VoiceAgentPageInner() {
   // ── LiveKit session ──────────────────────────────────────────────────────
   const {
     status,
@@ -636,6 +873,14 @@ export default function VoiceAgentPage() {
   const [isSending, setIsSending] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
+  // ── Skills ────────────────────────────────────────────────────────────────
+  const [skillConfigs,      setSkillConfigs]      = useState<Record<string, SkillConfig>>({})
+  const [skillMenuOpen,     setSkillMenuOpen]      = useState(false)
+  const [skillSearch,       setSkillSearch]        = useState('')
+  const [activeSkillModal,  setActiveSkillModal]   = useState<SkillDef | null>(null)
+  const [modalInputs,       setModalInputs]        = useState<Record<string, string>>({})
+  const rfInstance = useReactFlow()
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -663,6 +908,70 @@ export default function VoiceAgentPage() {
       setIsSending(false)
     }
   }, [inputText, isSending])
+
+  // ── Skills handlers ───────────────────────────────────────────────────────
+  const openSkillModal = useCallback((skill: SkillDef) => {
+    setActiveSkillModal(skill)
+    const existing = skillConfigs[skill.id]?.credentials ?? {}
+    const init: Record<string, string> = {}
+    skill.requiredCredentials.forEach((f) => { init[f.key] = existing[f.key] ?? '' })
+    setModalInputs(init)
+  }, [skillConfigs])
+
+  const closeSkillModal = useCallback(() => {
+    setActiveSkillModal(null)
+    setModalInputs({})
+  }, [])
+
+  const connectSkill = useCallback(() => {
+    if (!activeSkillModal) return
+    setSkillConfigs((prev) => ({
+      ...prev,
+      [activeSkillModal.id]: { configured: true, credentials: { ...modalInputs } },
+    }))
+    closeSkillModal()
+  }, [activeSkillModal, modalInputs, closeSkillModal])
+
+  const onSkillDragStart = useCallback((e: React.DragEvent, skill: SkillDef) => {
+    e.dataTransfer.setData('application/skill-id', skill.id)
+    e.dataTransfer.effectAllowed = 'move'
+  }, [])
+
+  const onCanvasDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }, [])
+
+  const onCanvasDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    const skillId = e.dataTransfer.getData('application/skill-id')
+    if (!skillId) return
+    const skill = SKILLS_DATA.find((s) => s.id === skillId)
+    if (!skill) return
+    const position = rfInstance.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    const newNodeId = `skill-${skill.id}-${Date.now()}`
+    const newNode: Node = {
+      id:       newNodeId,
+      type:     'skillNode',
+      position,
+      data: {
+        icon:     skill.icon,
+        name:     skill.name,
+        category: skill.category,
+        status:   'active',
+      },
+    }
+    setRfNodes((prev) => [...prev, newNode])
+    setRfEdges((prev) => [...prev, mkEdge('openclaw', newNodeId, 'custom')])
+  }, [rfInstance, setRfNodes, setRfEdges])
+
+  const filteredSkills = useMemo(() => {
+    const q = skillSearch.trim().toLowerCase()
+    if (!q) return SKILLS_DATA
+    return SKILLS_DATA.filter(
+      (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q) || s.category.toLowerCase().includes(q)
+    )
+  }, [skillSearch])
 
   // ── Polls ─────────────────────────────────────────────────────────────────
   const [tasks,       setTasks]       = useState<Task[]>([])
@@ -776,6 +1085,11 @@ export default function VoiceAgentPage() {
     custom: treeNodes.length,
   }), [tasks, agents, jobs, treeNodes])
 
+  const connectedSkillCount = useMemo(
+    () => Object.values(skillConfigs).filter((c) => c.configured).length,
+    [skillConfigs]
+  )
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <>
@@ -829,7 +1143,7 @@ export default function VoiceAgentPage() {
           <Divider />
 
           {/* Chat section */}
-          <div style={{ ...css.section, flex: 1, minHeight: 0 }}>
+          <div style={{ ...css.section, flex: skillMenuOpen ? '0 0 160px' : 1, minHeight: 0, overflow: 'hidden' }}>
             <SectionLabel>CHAT · KATY</SectionLabel>
             <div style={css.chatScroll}>
               {messages.length === 0 && (
@@ -866,6 +1180,83 @@ export default function VoiceAgentPage() {
             </div>
           </div>
 
+          <Divider />
+
+          {/* Skills section */}
+          <div style={{ display: 'flex', flexDirection: 'column', flex: skillMenuOpen ? 1 : '0 0 auto', minHeight: 0, overflow: 'hidden' }}>
+            {/* Skills header row */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px 8px' }}>
+              <SectionLabel>SKILLS</SectionLabel>
+              <button
+                onClick={() => setSkillMenuOpen((v) => !v)}
+                style={{ background: 'none', border: '1px solid #2a2a4a', borderRadius: 4, color: skillMenuOpen ? '#fbbf24' : '#4b5563', cursor: 'pointer', padding: '3px 6px', fontSize: 11, lineHeight: 1, transition: 'all 0.15s' }}
+                title={skillMenuOpen ? 'Collapse skills' : 'Expand skills'}
+              >
+                {skillMenuOpen ? '▾' : '⊞'}
+              </button>
+            </div>
+
+            {/* Skills panel (collapsible) */}
+            {skillMenuOpen && (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 14px 10px', gap: 8, overflow: 'hidden' }}>
+                {/* Search */}
+                <input
+                  style={{ ...css.chatInput, width: '100%' }}
+                  value={skillSearch}
+                  onChange={(e) => setSkillSearch(e.target.value)}
+                  placeholder="Search skills…"
+                />
+                {/* Card grid */}
+                <div style={{ overflowY: 'auto', flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, paddingRight: 2 }}>
+                  {filteredSkills.map((skill) => {
+                    const configured = skillConfigs[skill.id]?.configured ?? false
+                    const draggable  = configured
+                    return (
+                      <div
+                        key={skill.id}
+                        draggable={draggable}
+                        onDragStart={draggable ? (e) => onSkillDragStart(e, skill) : undefined}
+                        onClick={() => openSkillModal(skill)}
+                        title={`${skill.name} — ${skill.description}`}
+                        style={{
+                          background: '#0d0d1a',
+                          border: `1px solid ${configured ? '#22c55e44' : '#2a2a4a'}`,
+                          borderRadius: 6,
+                          padding: '7px 5px 6px',
+                          cursor: draggable ? 'grab' : 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: 3,
+                          minHeight: 70,
+                          position: 'relative',
+                          transition: 'border-color 0.15s, background 0.15s',
+                          userSelect: 'none',
+                        }}
+                      >
+                        {configured && (
+                          <span style={{ position: 'absolute', top: 4, right: 5, width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
+                        )}
+                        <span style={{ fontSize: 16, lineHeight: 1.2 }}>{skill.icon}</span>
+                        <span style={skillCardNameStyle}>
+                          {skill.name}
+                        </span>
+                      </div>
+                    )
+                  })}
+                  {filteredSkills.length === 0 && (
+                    <div style={{ gridColumn: '1/-1', fontSize: 9, color: '#30363d', textAlign: 'center', padding: '12px 0', fontStyle: 'italic' }}>
+                      No skills match "{skillSearch}"
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 8, color: '#2a2a4a', textAlign: 'center', letterSpacing: '0.1em' }}>
+                  {connectedSkillCount} / {SKILLS_DATA.length} connected · drag to canvas
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Stats bar */}
           <div style={css.statsBar}>
             {([ ['Tasks', stats.tasks, '#a1a1aa'], ['Done', stats.done, '#22c55e'],
@@ -895,7 +1286,7 @@ export default function VoiceAgentPage() {
             </div>
           </div>
 
-          <div style={{ flex: 1, position: 'relative' }}>
+          <div style={{ flex: 1, position: 'relative' }} onDrop={onCanvasDrop} onDragOver={onCanvasDragOver}>
             <ReactFlow
               nodes={rfNodes}
               edges={rfEdges}
@@ -920,6 +1311,7 @@ export default function VoiceAgentPage() {
                   if (n.type === 'memoryFileNode')  return '#21262d'
                   if (n.type === 'groupHeaderNode') return (n.data?.color as string) ?? '#374151'
                   if (n.type === 'customNode')      return '#7c3aed'
+                  if (n.type === 'skillNode')       return '#1d4ed8'
                   return sc(n.data?.status as string | undefined).border
                 }}
                 maskColor="rgba(0,0,0,0.65)"
@@ -930,6 +1322,71 @@ export default function VoiceAgentPage() {
           </div>
         </main>
       </div>
+
+      {/* ═══ CREDENTIAL MODAL ═══════════════════════════════════════════════ */}
+      {activeSkillModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={(e) => { if (e.target === e.currentTarget) closeSkillModal() }}
+        >
+          <div style={{ background: '#0d1117', border: '1px solid #2a2a4a', borderRadius: 10, padding: '24px 22px', width: 360, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: 16, boxShadow: '0 0 60px #000a' }}>
+            {/* Modal header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 26, lineHeight: 1 }}>{activeSkillModal.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontFamily: "'Oxanium', sans-serif", fontWeight: 700, fontSize: 14, color: '#fbbf24', letterSpacing: '0.08em' }}>
+                  {activeSkillModal.name}
+                </div>
+                <div style={{ fontSize: 9, color: '#4b5563', marginTop: 2, letterSpacing: '0.06em' }}>{activeSkillModal.category}</div>
+              </div>
+              <button onClick={closeSkillModal} style={{ background: 'none', border: 'none', color: '#4b5563', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 4 }}>✕</button>
+            </div>
+            <div style={{ fontSize: 10, color: '#6b7280', lineHeight: 1.6, borderTop: '1px solid #161b22', paddingTop: 12 }}>
+              {activeSkillModal.description}
+            </div>
+
+            {/* Credential fields or built-in message */}
+            {activeSkillModal.requiredCredentials.length === 0 ? (
+              <div style={{ background: '#052e16', border: '1px solid #14532d44', borderRadius: 6, padding: '12px 14px', fontSize: 10, color: '#4ade80', lineHeight: 1.6 }}>
+                ✅ This skill is built-in and ready to use. No credentials needed.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {activeSkillModal.requiredCredentials.map((field) => (
+                  <div key={field.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: 9, color: '#9ca3af', letterSpacing: '0.08em', fontWeight: 600, textTransform: 'uppercase' }}>
+                      {field.label}
+                    </label>
+                    <input
+                      type={field.type}
+                      placeholder={field.placeholder}
+                      value={modalInputs[field.key] ?? ''}
+                      onChange={(e) => setModalInputs((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                      style={{ ...css.chatInput, width: '100%', fontSize: 11 }}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button
+                onClick={connectSkill}
+                style={{ flex: 1, background: '#15803d', border: '1px solid #22c55e', borderRadius: 6, color: '#fff', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, padding: '9px 0', cursor: 'pointer', letterSpacing: '0.06em', transition: 'background 0.15s' }}
+              >
+                {activeSkillModal.requiredCredentials.length === 0 ? 'Activate' : 'Connect'}
+              </button>
+              <button
+                onClick={closeSkillModal}
+                style={{ background: '#111318', border: '1px solid #2a2a4a', borderRadius: 6, color: '#6b7280', fontSize: 11, fontFamily: "'JetBrains Mono', monospace", padding: '9px 16px', cursor: 'pointer', letterSpacing: '0.06em' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
