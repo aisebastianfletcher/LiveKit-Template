@@ -148,6 +148,23 @@ interface Workflow {
   createdAt: number
 }
 
+interface Output {
+  id: string
+  task_id?: string
+  title: string
+  content: string
+  format: string
+  created_at: number
+}
+
+interface ActivityEntry {
+  id: string
+  timestamp: number
+  action_type: string
+  label: string
+  status: string
+}
+
 // ─── Skills data ──────────────────────────────────────────────────────────────
 
 const SKILLS_DATA: SkillDef[] = [
@@ -412,6 +429,7 @@ const SZ = {
   jobNode:         { w: 208, h: 72  },
   customNode:      { w: 200, h: 72  },
   skillNode:       { w: 260, h: 88  },
+  outputNode:      { w: 220, h: 88  },
 } as const
 
 // ─── Dagre layout ─────────────────────────────────────────────────────────────
@@ -473,6 +491,7 @@ interface GraphData {
   openClawStatus: OpenClawStatus | null
   voiceConnected: boolean
   chatMsgCount: number
+  outputs: Output[]
 }
 
 function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
@@ -606,6 +625,16 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
     knownIds.add(nid)
   })
 
+  // Outputs
+  d.outputs.forEach((out) => {
+    const nid = `output-${out.id}`
+    nodes.push({
+      id: nid, type: 'outputNode', position: { x: 0, y: 0 },
+      data: out as unknown as Record<string, unknown>,
+    })
+    edges.push(mkEdge('br-workspace', nid, 'gold-animated'))
+  })
+
   return { nodes: runDagre(nodes, edges), edges }
 }
 
@@ -629,6 +658,18 @@ const SC: Record<string, { border: string; bg: string; text: string; dot: string
 const fallbackSC = SC.idle
 function sc(s?: string): { border: string; bg: string; text: string; dot: string } {
   return SC[s ?? ''] ?? fallbackSC
+}
+
+function glowStyle(status?: string): CSSProperties {
+  if (status === 'thinking')
+    return { boxShadow: '0 0 18px #f59e0b, 0 0 6px #f59e0b' }
+  if (status === 'in_progress' || status === 'running' || status === 'active')
+    return { boxShadow: '0 0 18px #22c55e, 0 0 6px #22c55e' }
+  if (status === 'error' || status === 'failed')
+    return { boxShadow: '0 0 18px #ef4444' }
+  if (status === 'done' || status === 'completed')
+    return { boxShadow: '0 0 8px #22c55e40' }
+  return {}
 }
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
@@ -698,14 +739,16 @@ InputNode.displayName = 'InputNode'
 const OpenClawNode = memo(({ data }: NodeProps) => {
   const online = (data.status as string) === 'online'
   return (
-    <div style={{
-      ...nBase,
-      width: SZ.openClawNode.w, height: SZ.openClawNode.h,
-      background: 'linear-gradient(135deg,#1c1100 0%,#2a1800 60%,#1c1100 100%)',
-      border: `2px solid ${online ? '#d97706' : '#52525b'}`,
-      boxShadow: online ? '0 0 40px #d9770640,0 0 12px #d9770618,inset 0 1px 0 #d9770628' : 'none',
-      position: 'relative', overflow: 'hidden',
-    }}>
+    <div
+      className="katy-heartbeat"
+      style={{
+        ...nBase,
+        width: SZ.openClawNode.w, height: SZ.openClawNode.h,
+        background: 'linear-gradient(135deg,#1c1100 0%,#2a1800 60%,#1c1100 100%)',
+        border: `2px solid ${online ? '#d97706' : '#52525b'}`,
+        boxShadow: online ? '0 0 40px #d9770640,0 0 12px #d9770618,inset 0 1px 0 #d9770628' : '0 0 20px #52525b28',
+        position: 'relative', overflow: 'hidden',
+      }}>
       <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       {online && (
@@ -793,8 +836,11 @@ GroupHeaderNode.displayName = 'GroupHeaderNode'
 const TaskNode = memo(({ data }: NodeProps) => {
   const t = data as unknown as Task
   const c = sc(t.status)
+  const isActive = t.status === 'in_progress'
   return (
-    <div style={{ ...nBase, width: SZ.taskNode.w, height: SZ.taskNode.h, background: c.bg, borderColor: c.border, boxShadow: `0 0 8px ${c.border}22` }}>
+    <div
+      className={isActive ? 'hive-active' : undefined}
+      style={{ ...nBase, ...glowStyle(t.status), width: SZ.taskNode.w, height: SZ.taskNode.h, background: c.bg, borderColor: c.border }}>
       <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
@@ -817,8 +863,11 @@ TaskNode.displayName = 'TaskNode'
 const AgentNode = memo(({ data }: NodeProps) => {
   const a = data as unknown as Agent
   const c = sc(a.status)
+  const isActive = a.status === 'active'
   return (
-    <div style={{ ...nBase, width: SZ.agentNode.w, height: SZ.agentNode.h, background: c.bg, border: `1px dashed ${c.border}` }}>
+    <div
+      className={isActive ? 'hive-active' : undefined}
+      style={{ ...nBase, ...glowStyle(a.status), width: SZ.agentNode.w, height: SZ.agentNode.h, background: c.bg, border: `1px dashed ${c.border}` }}>
       <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
@@ -839,8 +888,11 @@ AgentNode.displayName = 'AgentNode'
 const JobNode = memo(({ data }: NodeProps) => {
   const j = data as unknown as Job
   const c = sc(j.status)
+  const isActive = j.status === 'running'
   return (
-    <div style={{ ...nBase, width: SZ.jobNode.w, height: SZ.jobNode.h, background: c.bg, borderColor: c.border }}>
+    <div
+      className={isActive ? 'hive-active' : j.schedule ? 'scheduled-job' : undefined}
+      style={{ ...nBase, ...glowStyle(j.status), width: SZ.jobNode.w, height: SZ.jobNode.h, background: c.bg, borderColor: c.border }}>
       <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
@@ -861,8 +913,11 @@ JobNode.displayName = 'JobNode'
 const CustomNode = memo(({ data }: NodeProps) => {
   const tn = data as unknown as CustomTreeNode
   const c = sc(tn.status)
+  const isActive = tn.status === 'thinking' || tn.status === 'active'
   return (
-    <div style={{ ...nBase, width: SZ.customNode.w, height: SZ.customNode.h, background: '#120d1f', border: `1px dashed ${c.border}` }}>
+    <div
+      className={isActive ? 'hive-active' : undefined}
+      style={{ ...nBase, ...glowStyle(tn.status), width: SZ.customNode.w, height: SZ.customNode.h, background: '#120d1f', border: `1px dashed ${c.border}` }}>
       <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
@@ -882,8 +937,11 @@ CustomNode.displayName = 'CustomNode'
 
 const SkillNode = memo(({ data }: NodeProps) => {
   const c = sc(data.status as string | undefined)
+  const isActive = (data.status as string) === 'active'
   return (
-    <div style={{ ...nBase, width: SZ.skillNode.w, height: SZ.skillNode.h, background: '#0d1a2e', border: `1px solid ${c.border}`, boxShadow: `0 0 8px ${c.border}22`, padding: '10px 12px' }}>
+    <div
+      className={isActive ? 'hive-active' : undefined}
+      style={{ ...nBase, ...glowStyle(data.status as string | undefined), width: SZ.skillNode.w, height: SZ.skillNode.h, background: '#0d1a2e', border: `1px solid ${c.border}`, padding: '10px 12px' }}>
       <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
@@ -905,6 +963,29 @@ const SkillNode = memo(({ data }: NodeProps) => {
 })
 SkillNode.displayName = 'SkillNode'
 
+const OutputNode = memo(({ data }: NodeProps) => {
+  const out = data as unknown as Output
+  const preview = out.content ? out.content.slice(0, 60) + (out.content.length > 60 ? '…' : '') : ''
+  return (
+    <div style={{ ...nBase, width: SZ.outputNode.w, height: SZ.outputNode.h, background: '#1c1100', border: '1px solid #d97706', boxShadow: '0 0 10px #d9770630' }}>
+      <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+        <span style={{ fontSize: 13, lineHeight: 1.2, flexShrink: 0 }}>📄</span>
+        <span style={{ ...nTitle, color: '#fbbf24', flex: 1 }}>
+          {out.title.length > 22 ? out.title.slice(0, 22) + '…' : out.title}
+        </span>
+      </div>
+      <div style={{ fontSize: 8, color: '#78350f', marginTop: 5, lineHeight: 1.4, maxHeight: 28, overflow: 'hidden' }}>{preview}</div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 7 }}>
+        <span style={{ ...bdg, borderColor: '#d97706', color: '#fbbf24' }}>output</span>
+        <span style={{ ...bdg, color: '#6b7280', borderColor: '#374151' }}>{out.format}</span>
+      </div>
+    </div>
+  )
+})
+OutputNode.displayName = 'OutputNode'
+
 // ─── Node type registry (stable reference — defined outside component) ────────
 
 const nodeTypes = {
@@ -918,6 +999,7 @@ const nodeTypes = {
   jobNode:         JobNode,
   customNode:      CustomNode,
   skillNode:       SkillNode,
+  outputNode:      OutputNode,
 }
 
 // ─── Skills constants ──────────────────────────────────────────────────────────
@@ -937,6 +1019,61 @@ function Divider() {
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return <div style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.22em', color: '#30363d' }}>{children}</div>
 }
+
+// ─── OutputCard ───────────────────────────────────────────────────────────────
+
+const OutputCard = memo(({ output }: { output: Output }) => {
+  const preview = output.content.slice(0, 100) + (output.content.length > 100 ? '…' : '')
+  return (
+    <div style={{ background: '#1c1100', border: '1px solid #d97706', borderRadius: 6, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 9, color: '#fbbf24', fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {output.title}
+        </span>
+        <span style={{ ...bdg, borderColor: '#d97706', color: '#d97706', flexShrink: 0 }}>{output.format}</span>
+      </div>
+      {preview && (
+        <div style={{ fontSize: 8, color: '#78350f', lineHeight: 1.5, wordBreak: 'break-word' }}>{preview}</div>
+      )}
+      <a
+        href={`/api/outputs/${output.id}/download`}
+        download
+        style={{ fontSize: 8, color: '#d97706', border: '1px solid #d9770644', borderRadius: 3, padding: '2px 7px', textDecoration: 'none', alignSelf: 'flex-end', letterSpacing: '0.08em' }}
+      >↓ Download</a>
+    </div>
+  )
+})
+OutputCard.displayName = 'OutputCard'
+
+// ─── ActivityTicker ───────────────────────────────────────────────────────────
+
+function activityDotColor(status: string): string {
+  if (status === 'created') return '#22c55e'
+  if (status === 'updated') return '#3b82f6'
+  if (status === 'deleted') return '#ef4444'
+  return '#f59e0b'
+}
+
+function fmtActivityTime(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+const ActivityTicker = memo(({ entries }: { entries: ActivityEntry[] }) => (
+  <div style={{ padding: '5px 10px 6px', borderTop: '1px solid #0d1117', display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div style={{ fontSize: 7, fontWeight: 600, letterSpacing: '0.18em', color: '#1f2937', marginBottom: 1 }}>LIVE ACTIVITY</div>
+    {entries.length === 0 ? (
+      <div style={{ fontSize: 8, color: '#1f2937', textAlign: 'center', fontStyle: 'italic', padding: '3px 0' }}>no activity yet</div>
+    ) : (
+      entries.slice(0, 8).map((entry) => (
+        <div key={entry.id} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 8, letterSpacing: '0.03em', animation: 'slideIn 0.3s ease' }}>
+          <span style={{ color: '#2d3748', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmtActivityTime(entry.timestamp)}</span>
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: activityDotColor(entry.status), flexShrink: 0 }} />
+          <span style={{ color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{entry.label}</span>
+        </div>
+      ))
+    )}
+  </div>
+))
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
@@ -1014,11 +1151,14 @@ function VoiceAgentPageInner() {
     setMessages((p) => [...p, { role: 'user', text, timestamp: new Date() }])
     setInputText('')
     setIsSending(true)
+    const active_skills = Object.entries(skillConfigs)
+      .filter(([, cfg]) => cfg.configured)
+      .map(([id]) => id)
     try {
       const res  = await fetch('/api/openclaw/chat', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ message: text }),
+        body:    JSON.stringify({ message: text, active_skills }),
       })
       const data = await res.json()
       setMessages((p) => [
@@ -1030,7 +1170,7 @@ function VoiceAgentPageInner() {
     } finally {
       setIsSending(false)
     }
-  }, [inputText, isSending])
+  }, [inputText, isSending, skillConfigs])
 
   // ── Skills handlers ───────────────────────────────────────────────────────
   const openSkillModal = useCallback((skill: SkillDef) => {
@@ -1052,6 +1192,16 @@ function VoiceAgentPageInner() {
       ...prev,
       [activeSkillModal.id]: { configured: true, credentials: { ...modalInputs } },
     }))
+    void fetch('/api/skills/register', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        id:          activeSkillModal.id,
+        name:        activeSkillModal.name,
+        category:    activeSkillModal.category,
+        credentials: modalInputs,
+      }),
+    }).catch(() => {})
     closeSkillModal()
   }, [activeSkillModal, modalInputs, closeSkillModal])
 
@@ -1194,6 +1344,8 @@ function VoiceAgentPageInner() {
   const [memoryFiles, setMemoryFiles] = useState<Record<string, MemoryFile>>({})
   const [telegramStatus,  setTelegramStatus]  = useState<TelegramStatus | null>(null)
   const [openClawStatus,  setOpenClawStatus]  = useState<OpenClawStatus | null>(null)
+  const [outputs,         setOutputs]         = useState<Output[]>([])
+  const [activityLog,     setActivityLog]     = useState<ActivityEntry[]>([])
 
   useEffect(() => {
     const go = async () => { try { const r = await fetch('/api/tasks');      if (r.ok) setTasks(await r.json())      } catch {} }
@@ -1249,6 +1401,16 @@ function VoiceAgentPageInner() {
     go(); const id = setInterval(go, 8000); return () => clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    const go = async () => { try { const r = await fetch('/api/outputs');  if (r.ok) setOutputs(await r.json())  } catch {} }
+    go(); const id = setInterval(go, 5000); return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    const go = async () => { try { const r = await fetch('/api/activity'); if (r.ok) setActivityLog(await r.json()) } catch {} }
+    go(); const id = setInterval(go, 2000); return () => clearInterval(id)
+  }, [])
+
   const onConnect = useCallback(
     (params: Connection) => {
       // Check if both endpoints are skill nodes
@@ -1286,6 +1448,7 @@ function VoiceAgentPageInner() {
     oc: `${openClawStatus?.status ?? ''}${openClawStatus?.model ?? ''}`,
     vc: isConnected,
     cm: messages.length,
+    op: outputs.map((o) => o.id),
   })
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1296,7 +1459,30 @@ function VoiceAgentPageInner() {
       openClawStatus,
       voiceConnected: isConnected,
       chatMsgCount: messages.length,
+      outputs,
     })
+
+    // Determine which node IDs are in an active/thinking state for edge glow
+    const activeNodeIds = new Set(
+      [...nodes, ...canvasSkillNodes].filter((n) => {
+        const s = n.data?.status as string | undefined
+        return s === 'thinking' || s === 'in_progress' || s === 'running' || s === 'active'
+      }).map((n) => n.id)
+    )
+    // Also glow edges from active agent nodes to connected skill nodes
+    const activeAgentIds = new Set(
+      agents.filter((a) => a.status === 'active').map((a) => `agent-${a.id}`)
+    )
+
+    const allEdges = [...edges, ...canvasSkillEdges].map((edge) => {
+      const targetActive  = activeNodeIds.has(edge.target)
+      const sourceIsAgent = activeAgentIds.has(edge.source)
+      if (targetActive || sourceIsAgent) {
+        return { ...edge, animated: true, style: { ...edge.style, stroke: '#f59e0b', strokeWidth: 3 } }
+      }
+      return edge
+    })
+
     // Preserve positions the user has dragged to; only use built positions for new nodes
     // Merge with user-placed skill nodes so they are never overwritten
     setRfNodes((prev) => {
@@ -1307,7 +1493,7 @@ function VoiceAgentPageInner() {
       const extraSkillNodes = canvasSkillNodes.filter((n) => !baseIds.has(n.id))
       return [...baseNodes, ...extraSkillNodes]
     })
-    setRfEdges([...edges, ...canvasSkillEdges])
+    setRfEdges(allEdges)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphKey, canvasSkillNodes, canvasSkillEdges])
 
@@ -1413,6 +1599,27 @@ function VoiceAgentPageInner() {
                 disabled={isSending || !inputText.trim()}
               >↑</button>
             </div>
+          </div>
+
+          <Divider />
+
+          {/* Outputs section */}
+          <div style={{ display: 'flex', flexDirection: 'column', flex: '0 0 auto', minHeight: 0, maxHeight: 200, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px 8px' }}>
+              <SectionLabel>OUTPUTS · KATY</SectionLabel>
+              <span style={{ fontSize: 8, color: '#d97706', border: '1px solid #d9770644', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.08em' }}>
+                {outputs.length}
+              </span>
+            </div>
+            {outputs.length === 0 ? (
+              <div style={{ padding: '0 14px 10px', fontSize: 9, color: '#2a2a4a', textAlign: 'center', fontStyle: 'italic' }}>
+                No outputs yet. Ask Katy to generate something.
+              </div>
+            ) : (
+              <div style={{ overflowY: 'auto', padding: '0 14px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {outputs.map((out) => <OutputCard key={out.id} output={out} />)}
+              </div>
+            )}
           </div>
 
           <Divider />
@@ -1550,6 +1757,9 @@ function VoiceAgentPageInner() {
               </div>
             )}
           </div>
+
+          {/* Activity ticker */}
+          <ActivityTicker entries={activityLog} />
 
           {/* Stats bar */}
           <div style={css.statsBar}>
@@ -1780,6 +1990,25 @@ const GLOBAL_CSS = `
   ::-webkit-scrollbar-thumb { background: #1f2937; border-radius: 4px; }
   @keyframes gpulse  { 0%,100% { opacity:1; transform:scale(1); }    50% { opacity:0.4; transform:scale(1.35); } }
   @keyframes gtyping { 0%,100% { opacity:0.2; } 40% { opacity:1; } 80% { opacity:0.2; } }
+  @keyframes hive-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.62; }
+  }
+  @keyframes katy-heartbeat {
+    0%, 100% { box-shadow: 0 0 40px #d9770640, 0 0 12px #d9770618, inset 0 1px 0 #d9770628; }
+    50%       { box-shadow: 0 0 72px #d9770668, 0 0 24px #d9770638, inset 0 1px 0 #d9770640; }
+  }
+  @keyframes scheduled-pulse {
+    0%, 100% { box-shadow: 0 0 6px #a855f766; }
+    50%       { box-shadow: 0 0 16px #a855f7aa; }
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .hive-active     { animation: hive-pulse 1.2s ease-in-out infinite; }
+  .katy-heartbeat  { animation: katy-heartbeat 2s ease-in-out infinite; }
+  .scheduled-job   { animation: scheduled-pulse 2s ease-in-out infinite; }
   .react-flow__controls-button {
     background: #111318 !important; border-color: #1f2937 !important; color: #6b7280 !important;
     font-family: 'JetBrains Mono', monospace !important;
