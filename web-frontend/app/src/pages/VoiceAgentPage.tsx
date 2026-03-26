@@ -1,6 +1,13 @@
 /**
- * VoiceAgentPage.tsx — GITWIX Agent v3
- * Architecture-mapped workflow tree. Every node mirrors a real system component.
+ * VoiceAgentPage.tsx — GITWIX Agent v3 (fixed)
+ *
+ * All hooks/components use their ACTUAL interfaces:
+ *   useLiveKitSession() → { status, agentStatusText, roomName, localMicStream,
+ *                            agentAudioStream, audioContext, segments, connect, disconnect }
+ *   useAudioAnalyser(audioContext, stream, isMic) → { rmsRef }
+ *   AuraVisualizer props: { auraMode: AuraMode, rmsRef }
+ *   AuraMode: 'disconnected' | 'idle' | 'user-speaking' | 'agent-speaking'
+ *   OpenClawLogo: no style prop
  *
  * npm install @xyflow/react dagre @types/dagre
  */
@@ -13,6 +20,7 @@ import {
   useMemo,
   memo,
   type CSSProperties,
+  type RefObject,
 } from 'react'
 import {
   ReactFlow,
@@ -108,15 +116,15 @@ interface OpenClawStatus {
 // ─── Node size registry ───────────────────────────────────────────────────────
 
 const SZ = {
-  inputNode:       { w: 192, h: 84 },
+  inputNode:       { w: 192, h: 84  },
   openClawNode:    { w: 268, h: 108 },
-  branchNode:      { w: 212, h: 50 },
-  memoryFileNode:  { w: 218, h: 96 },
-  groupHeaderNode: { w: 180, h: 50 },
-  taskNode:        { w: 208, h: 72 },
-  agentNode:       { w: 208, h: 72 },
-  jobNode:         { w: 208, h: 72 },
-  customNode:      { w: 200, h: 72 },
+  branchNode:      { w: 212, h: 50  },
+  memoryFileNode:  { w: 218, h: 96  },
+  groupHeaderNode: { w: 180, h: 50  },
+  taskNode:        { w: 208, h: 72  },
+  agentNode:       { w: 208, h: 72  },
+  jobNode:         { w: 208, h: 72  },
+  customNode:      { w: 200, h: 72  },
 } as const
 
 // ─── Dagre layout ─────────────────────────────────────────────────────────────
@@ -184,7 +192,7 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = []
   const edges: Edge[] = []
 
-  // ── Input layer ────────────────────────────────────────────────────────────
+  // Input layer
   nodes.push({
     id: 'in-telegram', type: 'inputNode', position: { x: 0, y: 0 },
     data: {
@@ -220,12 +228,12 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
   edges.push(mkEdge('in-voice',    'openclaw', 'gold-animated'))
   edges.push(mkEdge('in-chat',     'openclaw', 'gold-animated'))
 
-  // ── OpenClaw ──────────────────────────────────────────────────────────────
+  // OpenClaw
   nodes.push({
     id: 'openclaw', type: 'openClawNode', position: { x: 0, y: 0 },
     data: {
-      status:  d.openClawStatus?.status ?? 'offline',
-      model:   d.openClawStatus?.model  ?? '—',
+      status:  d.openClawStatus?.status  ?? 'offline',
+      model:   d.openClawStatus?.model   ?? '—',
       gateway: d.openClawStatus?.gateway ?? false,
     },
   })
@@ -233,7 +241,7 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
   edges.push(mkEdge('openclaw', 'br-memory',    'amber'))
   edges.push(mkEdge('openclaw', 'br-workspace', 'amber'))
 
-  // ── Memory branch ─────────────────────────────────────────────────────────
+  // Memory branch
   nodes.push({
     id: 'br-memory', type: 'branchNode', position: { x: 0, y: 0 },
     data: { label: 'GitHub Memory', icon: '⬡' },
@@ -250,15 +258,15 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
       data: {
         file:      f,
         icon:      memIcons[f],
-        preview:   mf?.preview ?? '(no content)',
+        preview:   mf?.preview    ?? '(no content)',
         updatedAt: mf?.updated_at ?? null,
-        size:      mf?.size ?? 0,
+        size:      mf?.size       ?? 0,
       },
     })
     edges.push(mkEdge('br-memory', `mem-${f}`, 'dim'))
   })
 
-  // ── Workspace branch ──────────────────────────────────────────────────────
+  // Workspace branch
   nodes.push({
     id: 'br-workspace', type: 'branchNode', position: { x: 0, y: 0 },
     data: { label: 'Workspace', icon: '◇' },
@@ -281,25 +289,20 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
   edges.push(mkEdge('br-workspace', 'grp-agents', 'dim'))
   edges.push(mkEdge('br-workspace', 'grp-jobs',   'dim'))
 
-  // Dynamic: tasks
   d.tasks.forEach((t) => {
     nodes.push({ id: `task-${t.id}`,  type: 'taskNode',  position: { x: 0, y: 0 }, data: t as unknown as Record<string, unknown> })
     edges.push(mkEdge('grp-tasks', `task-${t.id}`, 'faint'))
   })
-
-  // Dynamic: agents
   d.agents.forEach((a) => {
     nodes.push({ id: `agent-${a.id}`, type: 'agentNode', position: { x: 0, y: 0 }, data: a as unknown as Record<string, unknown> })
     edges.push(mkEdge('grp-agents', `agent-${a.id}`, 'faint'))
   })
-
-  // Dynamic: jobs
   d.jobs.forEach((j) => {
     nodes.push({ id: `job-${j.id}`,   type: 'jobNode',   position: { x: 0, y: 0 }, data: j as unknown as Record<string, unknown> })
     edges.push(mkEdge('grp-jobs', `job-${j.id}`, 'faint'))
   })
 
-  // Custom tree nodes from OpenClaw — attach to any known parent
+  // Custom tree nodes
   const knownIds = new Set(nodes.map((n) => n.id))
   d.treeNodes.forEach((tn) => {
     const nid = `custom-${tn.id}`
@@ -309,7 +312,7 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
     })
     let parentId = 'openclaw'
     if (tn.parent_id) {
-      if      (knownIds.has(tn.parent_id))            parentId = tn.parent_id
+      if      (knownIds.has(tn.parent_id))             parentId = tn.parent_id
       else if (knownIds.has(`custom-${tn.parent_id}`)) parentId = `custom-${tn.parent_id}`
     }
     edges.push(mkEdge(parentId, nid, 'custom'))
@@ -337,13 +340,15 @@ const SC: Record<string, { border: string; bg: string; text: string; dot: string
   error:       { border: '#ef4444', bg: '#2d0a0a', text: '#f87171', dot: '#ef4444' },
 }
 const fallbackSC = SC.idle
-function sc(s?: string) { return SC[s as string] ?? fallbackSC }
+function sc(s?: string): { border: string; bg: string; text: string; dot: string } {
+  return SC[s ?? ''] ?? fallbackSC
+}
 
-// ─── Shared node primitives ───────────────────────────────────────────────────
+// ─── Shared primitives ────────────────────────────────────────────────────────
 
-const INV_HANDLE: CSSProperties = { opacity: 0, width: 1, height: 1, minWidth: 1, minHeight: 1 }
+const INV: CSSProperties = { opacity: 0, width: 1, height: 1, minWidth: 1, minHeight: 1 }
 
-function Dot({ color, pulse }: { color: string; pulse?: boolean }) {
+function Dot({ color, pulse = false }: { color: string; pulse?: boolean }) {
   return (
     <span style={{
       display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
@@ -353,23 +358,19 @@ function Dot({ color, pulse }: { color: string; pulse?: boolean }) {
   )
 }
 
-function fmtTime(epoch: number | null): string {
+function fmtTime(epoch: number | null | undefined): string {
   if (!epoch) return '—'
   return new Date(epoch * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// Base styles reused across nodes
 const nBase: CSSProperties = {
   fontFamily: "'JetBrains Mono', monospace",
-  border: '1px solid #374151',
-  borderRadius: 8,
-  padding: '12px 14px',
-  background: '#111318',
-  boxSizing: 'border-box',
+  border: '1px solid #374151', borderRadius: 8,
+  padding: '12px 14px', background: '#111318', boxSizing: 'border-box',
 }
 const nTitle: CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: '0.02em', lineHeight: 1.3 }
 const nSub:   CSSProperties = { fontSize: 9, color: '#4b5563', letterSpacing: '0.08em' }
-const badgeBase: CSSProperties = {
+const bdg:    CSSProperties = {
   fontSize: 8, border: '1px solid', borderRadius: 4, padding: '1px 5px', letterSpacing: '0.08em',
 }
 
@@ -379,7 +380,7 @@ const InputNode = memo(({ data }: NodeProps) => {
   const c = sc(data.status as string)
   return (
     <div style={{ ...nBase, width: SZ.inputNode.w, height: SZ.inputNode.h, borderColor: c.border, background: c.bg, boxShadow: `0 0 16px ${c.border}28` }}>
-      <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+      <Handle type="source" position={Position.Bottom} style={INV} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <span style={{ fontSize: 18, lineHeight: 1 }}>{data.icon as string}</span>
         <div style={{ flex: 1 }}>
@@ -388,30 +389,30 @@ const InputNode = memo(({ data }: NodeProps) => {
         </div>
         <Dot color={c.dot} pulse={data.status === 'online'} />
       </div>
-      <div style={{ marginTop: 10, fontSize: 9, letterSpacing: '0.1em', color: c.dot }}>{data.metric as string}</div>
+      <div style={{ marginTop: 10, fontSize: 9, letterSpacing: '0.1em', color: c.dot }}>
+        {data.metric as string}
+      </div>
     </div>
   )
 })
 InputNode.displayName = 'InputNode'
 
 const OpenClawNode = memo(({ data }: NodeProps) => {
-  const online = data.status === 'online'
+  const online = (data.status as string) === 'online'
   return (
     <div style={{
       ...nBase,
       width: SZ.openClawNode.w, height: SZ.openClawNode.h,
-      background: 'linear-gradient(135deg, #1c1100 0%, #2a1800 60%, #1c1100 100%)',
+      background: 'linear-gradient(135deg,#1c1100 0%,#2a1800 60%,#1c1100 100%)',
       border: `2px solid ${online ? '#d97706' : '#52525b'}`,
-      boxShadow: online ? '0 0 40px #d9770640, 0 0 12px #d9770618, inset 0 1px 0 #d9770628' : 'none',
+      boxShadow: online ? '0 0 40px #d9770640,0 0 12px #d9770618,inset 0 1px 0 #d9770628' : 'none',
       position: 'relative', overflow: 'hidden',
     }}>
-      <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-      <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+      <Handle type="target" position={Position.Top}    style={INV} />
+      <Handle type="source" position={Position.Bottom} style={INV} />
       {online && (
-        <div style={{
-          position: 'absolute', inset: 0, borderRadius: 10, pointerEvents: 'none',
-          background: 'radial-gradient(ellipse at 50% 0%, #d9770612 0%, transparent 70%)',
-        }} />
+        <div style={{ position: 'absolute', inset: 0, borderRadius: 10, pointerEvents: 'none',
+          background: 'radial-gradient(ellipse at 50% 0%,#d9770612 0%,transparent 70%)' }} />
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, position: 'relative' }}>
         <div style={{
@@ -421,7 +422,7 @@ const OpenClawNode = memo(({ data }: NodeProps) => {
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
         }}>⬡</div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: "'Oxanium', sans-serif", fontWeight: 700, fontSize: 15, letterSpacing: '0.1em', color: online ? '#fbbf24' : '#71717a', lineHeight: 1 }}>
+          <div style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 700, fontSize: 15, letterSpacing: '0.1em', color: online ? '#fbbf24' : '#71717a', lineHeight: 1 }}>
             OPENCLAW
           </div>
           <div style={{ ...nSub, marginTop: 3 }}>Brain · Router · Orchestrator</div>
@@ -429,16 +430,16 @@ const OpenClawNode = memo(({ data }: NodeProps) => {
         <Dot color={online ? '#d97706' : '#52525b'} pulse={online} />
       </div>
       <div style={{ display: 'flex', gap: 7, marginTop: 11, position: 'relative' }}>
-        <span style={{ ...badgeBase, borderColor: online ? '#d97706' : '#3f3f46', color: online ? '#fbbf24' : '#52525b' }}>
+        <span style={{ ...bdg, borderColor: online ? '#d97706' : '#3f3f46', color: online ? '#fbbf24' : '#52525b' }}>
           {online ? '● online' : '○ offline'}
         </span>
         {data.model && (
-          <span style={{ ...badgeBase, borderColor: '#374151', color: '#6b7280', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ ...bdg, borderColor: '#374151', color: '#6b7280', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {data.model as string}
           </span>
         )}
         {data.gateway && (
-          <span style={{ ...badgeBase, borderColor: '#1d4ed8', color: '#60a5fa' }}>gateway</span>
+          <span style={{ ...bdg, borderColor: '#1d4ed8', color: '#60a5fa' }}>gateway</span>
         )}
       </div>
     </div>
@@ -447,16 +448,11 @@ const OpenClawNode = memo(({ data }: NodeProps) => {
 OpenClawNode.displayName = 'OpenClawNode'
 
 const BranchNode = memo(({ data }: NodeProps) => (
-  <div style={{
-    ...nBase,
-    width: SZ.branchNode.w, height: SZ.branchNode.h,
-    background: '#111318', border: '1px solid #2d3748',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-  }}>
-    <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-    <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+  <div style={{ ...nBase, width: SZ.branchNode.w, height: SZ.branchNode.h, background: '#111318', border: '1px solid #2d3748', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+    <Handle type="target" position={Position.Top}    style={INV} />
+    <Handle type="source" position={Position.Bottom} style={INV} />
     <span style={{ fontSize: 11, color: '#4b5563' }}>{data.icon as string}</span>
-    <span style={{ fontFamily: "'Oxanium', sans-serif", fontWeight: 600, fontSize: 10, letterSpacing: '0.15em', color: '#94a3b8' }}>
+    <span style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 600, fontSize: 10, letterSpacing: '0.15em', color: '#94a3b8' }}>
       {data.label as string}
     </span>
   </div>
@@ -464,9 +460,9 @@ const BranchNode = memo(({ data }: NodeProps) => (
 BranchNode.displayName = 'BranchNode'
 
 const MemoryFileNode = memo(({ data }: NodeProps) => (
-  <div style={{ ...nBase, width: SZ.memoryFileNode.w, height: SZ.memoryFileNode.h, background: '#0d1117', border: '1px solid #21262d', borderRadius: 8 }}>
-    <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-    <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+  <div style={{ ...nBase, width: SZ.memoryFileNode.w, height: SZ.memoryFileNode.h, background: '#0d1117', border: '1px solid #21262d' }}>
+    <Handle type="target" position={Position.Top}    style={INV} />
+    <Handle type="source" position={Position.Bottom} style={INV} />
     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
       <span style={{ fontSize: 12 }}>{data.icon as string}</span>
       <div style={{ ...nTitle, color: '#c9d1d9', fontSize: 10 }}>memory/{data.file as string}.md</div>
@@ -475,26 +471,21 @@ const MemoryFileNode = memo(({ data }: NodeProps) => (
       {(data.preview as string) || '(empty)'}
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-      <span style={{ ...badgeBase, color: '#30363d', borderColor: '#21262d' }}>{data.size as number}b</span>
-      <span style={{ ...badgeBase, color: '#30363d', borderColor: '#21262d' }}>↺ {fmtTime(data.updatedAt as number | null)}</span>
+      <span style={{ ...bdg, color: '#30363d', borderColor: '#21262d' }}>{data.size as number}b</span>
+      <span style={{ ...bdg, color: '#30363d', borderColor: '#21262d' }}>↺ {fmtTime(data.updatedAt as number | null)}</span>
     </div>
   </div>
 ))
 MemoryFileNode.displayName = 'MemoryFileNode'
 
 const GroupHeaderNode = memo(({ data }: NodeProps) => (
-  <div style={{
-    ...nBase,
-    width: SZ.groupHeaderNode.w, height: SZ.groupHeaderNode.h,
-    background: '#0e1117', border: `1px solid ${data.color as string}30`,
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 14px',
-  }}>
-    <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-    <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
-    <span style={{ fontFamily: "'Oxanium', sans-serif", fontWeight: 600, fontSize: 10, letterSpacing: '0.15em', color: data.color as string }}>
+  <div style={{ ...nBase, width: SZ.groupHeaderNode.w, height: SZ.groupHeaderNode.h, background: '#0e1117', border: `1px solid ${data.color as string}30`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 14px' }}>
+    <Handle type="target" position={Position.Top}    style={INV} />
+    <Handle type="source" position={Position.Bottom} style={INV} />
+    <span style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 600, fontSize: 10, letterSpacing: '0.15em', color: data.color as string }}>
       {data.label as string}
     </span>
-    <span style={{ fontFamily: "'Oxanium', sans-serif", fontWeight: 700, fontSize: 16, color: data.color as string }}>
+    <span style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 700, fontSize: 16, color: data.color as string }}>
       {data.count as number}
     </span>
   </div>
@@ -506,8 +497,8 @@ const TaskNode = memo(({ data }: NodeProps) => {
   const c = sc(t.status)
   return (
     <div style={{ ...nBase, width: SZ.taskNode.w, height: SZ.taskNode.h, background: c.bg, borderColor: c.border, boxShadow: `0 0 8px ${c.border}22` }}>
-      <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-      <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+      <Handle type="target" position={Position.Top}    style={INV} />
+      <Handle type="source" position={Position.Bottom} style={INV} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={t.status === 'in_progress'} />
         <span style={{ ...nTitle, color: c.text, flex: 1 }}>
@@ -515,8 +506,8 @@ const TaskNode = memo(({ data }: NodeProps) => {
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
-        <span style={{ ...badgeBase, borderColor: c.border, color: c.text }}>{t.status}</span>
-        <span style={{ ...badgeBase, color: '#4b5563', borderColor: '#374151' }}>
+        <span style={{ ...bdg, borderColor: c.border, color: c.text }}>{t.status}</span>
+        <span style={{ ...bdg, color: '#4b5563', borderColor: '#374151' }}>
           {t.category === 'long_term' ? 'long-term' : 'short-term'}
         </span>
       </div>
@@ -530,8 +521,8 @@ const AgentNode = memo(({ data }: NodeProps) => {
   const c = sc(a.status)
   return (
     <div style={{ ...nBase, width: SZ.agentNode.w, height: SZ.agentNode.h, background: c.bg, border: `1px dashed ${c.border}` }}>
-      <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-      <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+      <Handle type="target" position={Position.Top}    style={INV} />
+      <Handle type="source" position={Position.Bottom} style={INV} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={a.status === 'active'} />
         <span style={{ ...nTitle, color: c.text, flex: 1 }}>
@@ -539,8 +530,8 @@ const AgentNode = memo(({ data }: NodeProps) => {
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
-        <span style={{ ...badgeBase, borderColor: c.border, color: c.text }}>agent</span>
-        <span style={{ ...badgeBase, color: '#4b5563', borderColor: '#374151' }}>{a.type}</span>
+        <span style={{ ...bdg, borderColor: c.border, color: c.text }}>agent</span>
+        <span style={{ ...bdg, color: '#4b5563', borderColor: '#374151' }}>{a.type}</span>
       </div>
     </div>
   )
@@ -552,8 +543,8 @@ const JobNode = memo(({ data }: NodeProps) => {
   const c = sc(j.status)
   return (
     <div style={{ ...nBase, width: SZ.jobNode.w, height: SZ.jobNode.h, background: c.bg, borderColor: c.border }}>
-      <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-      <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+      <Handle type="target" position={Position.Top}    style={INV} />
+      <Handle type="source" position={Position.Bottom} style={INV} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={j.status === 'running'} />
         <span style={{ ...nTitle, color: c.text, flex: 1 }}>
@@ -561,8 +552,8 @@ const JobNode = memo(({ data }: NodeProps) => {
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
-        <span style={{ ...badgeBase, borderColor: c.border, color: c.text }}>{j.status}</span>
-        {j.schedule && <span style={{ ...badgeBase, color: '#7c3aed', borderColor: '#4c1d95' }}>{j.schedule}</span>}
+        <span style={{ ...bdg, borderColor: c.border, color: c.text }}>{j.status}</span>
+        {j.schedule && <span style={{ ...bdg, color: '#7c3aed', borderColor: '#4c1d95' }}>{j.schedule}</span>}
       </div>
     </div>
   )
@@ -574,8 +565,8 @@ const CustomNode = memo(({ data }: NodeProps) => {
   const c = sc(tn.status)
   return (
     <div style={{ ...nBase, width: SZ.customNode.w, height: SZ.customNode.h, background: '#120d1f', border: `1px dashed ${c.border}` }}>
-      <Handle type="target" position={Position.Top}    style={INV_HANDLE} />
-      <Handle type="source" position={Position.Bottom} style={INV_HANDLE} />
+      <Handle type="target" position={Position.Top}    style={INV} />
+      <Handle type="source" position={Position.Bottom} style={INV} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
         <Dot color={c.dot} pulse={tn.status === 'thinking' || tn.status === 'active'} />
         <span style={{ ...nTitle, color: '#c084fc', flex: 1 }}>
@@ -583,15 +574,15 @@ const CustomNode = memo(({ data }: NodeProps) => {
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
-        <span style={{ ...badgeBase, borderColor: '#6d28d9', color: '#a855f7' }}>{tn.type}</span>
-        {tn.status && <span style={{ ...badgeBase, borderColor: c.border, color: c.dot }}>{tn.status}</span>}
+        <span style={{ ...bdg, borderColor: '#6d28d9', color: '#a855f7' }}>{tn.type}</span>
+        {tn.status && <span style={{ ...bdg, borderColor: c.border, color: c.dot }}>{tn.status}</span>}
       </div>
     </div>
   )
 })
 CustomNode.displayName = 'CustomNode'
 
-// ─── Node type registry ───────────────────────────────────────────────────────
+// ─── Node type registry (stable reference — defined outside component) ────────
 
 const nodeTypes = {
   inputNode:       InputNode,
@@ -605,13 +596,39 @@ const nodeTypes = {
   customNode:      CustomNode,
 }
 
-// ─── Main Page Component ──────────────────────────────────────────────────────
+// ─── Small presentational helpers ────────────────────────────────────────────
+
+function Divider() {
+  return <div style={{ height: 1, background: '#161b22', margin: '0 14px' }} />
+}
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.22em', color: '#30363d' }}>{children}</div>
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function VoiceAgentPage() {
-  // ── LiveKit / Voice ───────────────────────────────────────────────────────
-  const { isConnected, connect, disconnect, room } = useLiveKitSession()
-  const { analyserNode } = useAudioAnalyser(room)
-  const auraMode: AuraMode = isConnected ? 'listening' : 'idle'
+  // ── LiveKit session ──────────────────────────────────────────────────────
+  const {
+    status,
+    agentAudioStream,
+    audioContext,
+    connect,
+    disconnect,
+  } = useLiveKitSession()
+
+  const isConnected = status === 'connected'
+
+  // Derive AuraMode from connection status
+  const auraMode: AuraMode = isConnected ? 'agent-speaking' : 'disconnected'
+
+  // ── Audio analyser — pass all 3 required args ────────────────────────────
+  // rmsRef is used directly by AuraVisualizer
+  const { rmsRef } = useAudioAnalyser(
+    audioContext ?? null,
+    agentAudioStream ?? null,
+    false  // isMic = false — we're analysing the agent stream
+  )
 
   // ── Chat ──────────────────────────────────────────────────────────────────
   const [messages,  setMessages]  = useState<ChatMessage[]>([])
@@ -619,7 +636,9 @@ export default function VoiceAgentPage() {
   const [isSending, setIsSending] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
 
   const sendMessage = useCallback(async () => {
     const text = inputText.trim()
@@ -646,44 +665,44 @@ export default function VoiceAgentPage() {
   }, [inputText, isSending])
 
   // ── Polls ─────────────────────────────────────────────────────────────────
-  const [tasks,      setTasks]      = useState<Task[]>([])
-  const [agents,     setAgents]     = useState<Agent[]>([])
-  const [jobs,       setJobs]       = useState<Job[]>([])
-  const [treeNodes,  setTreeNodes]  = useState<CustomTreeNode[]>([])
+  const [tasks,       setTasks]       = useState<Task[]>([])
+  const [agents,      setAgents]      = useState<Agent[]>([])
+  const [jobs,        setJobs]        = useState<Job[]>([])
+  const [treeNodes,   setTreeNodes]   = useState<CustomTreeNode[]>([])
   const [memoryFiles, setMemoryFiles] = useState<Record<string, MemoryFile>>({})
   const [telegramStatus,  setTelegramStatus]  = useState<TelegramStatus | null>(null)
   const [openClawStatus,  setOpenClawStatus]  = useState<OpenClawStatus | null>(null)
 
   useEffect(() => {
-    const go = async () => { try { const r = await fetch('/api/tasks');      if (r.ok) setTasks(await r.json())     } catch {} }
+    const go = async () => { try { const r = await fetch('/api/tasks');      if (r.ok) setTasks(await r.json())      } catch {} }
     go(); const id = setInterval(go, 5000); return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
-    const go = async () => { try { const r = await fetch('/api/agents');     if (r.ok) setAgents(await r.json())    } catch {} }
+    const go = async () => { try { const r = await fetch('/api/agents');     if (r.ok) setAgents(await r.json())     } catch {} }
     go(); const id = setInterval(go, 5000); return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
-    const go = async () => { try { const r = await fetch('/api/jobs/queue'); if (r.ok) setJobs(await r.json())      } catch {} }
+    const go = async () => { try { const r = await fetch('/api/jobs/queue'); if (r.ok) setJobs(await r.json())       } catch {} }
     go(); const id = setInterval(go, 6000); return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
-    const go = async () => { try { const r = await fetch('/api/tree/nodes'); if (r.ok) setTreeNodes(await r.json()) } catch {} }
+    const go = async () => { try { const r = await fetch('/api/tree/nodes'); if (r.ok) setTreeNodes(await r.json())  } catch {} }
     go(); const id = setInterval(go, 3000); return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
     const FILES = ['profile', 'tasks', 'conversations', 'automations']
     const go = async () => {
-      const results = await Promise.allSettled(FILES.map((f) =>
-        fetch(`/api/memory/${f}`).then((r) => (r.ok ? r.json() : null))
-      ))
+      const results = await Promise.allSettled(
+        FILES.map((f) => fetch(`/api/memory/${f}`).then((r) => (r.ok ? r.json() : null)))
+      )
       setMemoryFiles((prev) => {
         const next = { ...prev }
         results.forEach((res, i) => {
-          if (res.status === 'fulfilled' && res.value) next[FILES[i]] = res.value
+          if (res.status === 'fulfilled' && res.value != null) next[FILES[i]] = res.value as MemoryFile
         })
         return next
       })
@@ -698,8 +717,11 @@ export default function VoiceAgentPage() {
           fetch('/api/integrations/status'),
           fetch('/api/openclaw/status'),
         ])
-        if (intR.ok) { const d = await intR.json(); setTelegramStatus(d.telegram) }
-        if (ocR.ok)  setOpenClawStatus(await ocR.json())
+        if (intR.ok) {
+          const d = await intR.json() as { telegram?: TelegramStatus }
+          if (d.telegram) setTelegramStatus(d.telegram)
+        }
+        if (ocR.ok) setOpenClawStatus(await ocR.json() as OpenClawStatus)
       } catch {}
     }
     go(); const id = setInterval(go, 8000); return () => clearInterval(id)
@@ -710,19 +732,19 @@ export default function VoiceAgentPage() {
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([])
 
   const onConnect = useCallback(
-    (params: Connection) => setRfEdges((eds) => addEdge(params, eds)),
+    (params: Connection) => setRfEdges((eds: Edge[]) => addEdge(params, eds)),
     [setRfEdges]
   )
 
-  // Stable graph key — only rebuild when data ids/statuses actually change
+  // Stable graph key — only rebuild when data actually changes
   const graphKey = JSON.stringify({
-    t:  tasks.map((t) => `${t.id}:${t.status}:${t.category}`),
+    t:  tasks.map((t)  => `${t.id}:${t.status}:${t.category}`),
     a:  agents.map((a) => `${a.id}:${a.status}`),
-    j:  jobs.map((j) => `${j.id}:${j.status}`),
+    j:  jobs.map((j)   => `${j.id}:${j.status}`),
     m:  Object.keys(memoryFiles).map((k) => `${k}:${memoryFiles[k]?.updated_at ?? 0}`),
     c:  treeNodes.map((n) => `${n.id}:${n.status}:${n.parent_id}`),
     tg: telegramStatus?.status,
-    oc: openClawStatus?.status + openClawStatus?.model,
+    oc: `${openClawStatus?.status ?? ''}${openClawStatus?.model ?? ''}`,
     vc: isConnected,
     cm: messages.length,
   })
@@ -731,7 +753,8 @@ export default function VoiceAgentPage() {
   useEffect(() => {
     const { nodes, edges } = buildGraph({
       tasks, agents, jobs, memoryFiles, treeNodes,
-      telegramStatus, openClawStatus,
+      telegramStatus,
+      openClawStatus,
       voiceConnected: isConnected,
       chatMsgCount: messages.length,
     })
@@ -742,11 +765,11 @@ export default function VoiceAgentPage() {
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
-    tasks:   tasks.length,
-    done:    tasks.filter((t) => t.status === 'completed').length,
-    agents:  agents.filter((a) => a.status === 'active').length,
-    jobs:    jobs.filter((j) => j.status === 'queued' || j.status === 'running').length,
-    custom:  treeNodes.length,
+    tasks:  tasks.length,
+    done:   tasks.filter((t) => t.status === 'completed').length,
+    agents: agents.filter((a) => a.status === 'active').length,
+    jobs:   jobs.filter((j) => j.status === 'queued' || j.status === 'running').length,
+    custom: treeNodes.length,
   }), [tasks, agents, jobs, treeNodes])
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -755,13 +778,13 @@ export default function VoiceAgentPage() {
       <style>{GLOBAL_CSS}</style>
       <div style={css.root}>
 
-        {/* ═══ SIDEBAR ═══════════════════════════════════════════════════════ */}
+        {/* ═══ SIDEBAR ══════════════════════════════════════════════════════ */}
         <aside style={css.sidebar}>
 
-          {/* Header */}
+          {/* Header — OpenClawLogo takes no props */}
           <div style={css.sidebarHead}>
             <div style={{ position: 'relative', width: 30, height: 30, flexShrink: 0 }}>
-              <OpenClawLogo style={{ width: 30, height: 30 }} />
+              <OpenClawLogo />
               <span style={{ position: 'absolute', bottom: -3, right: -3, fontSize: 9, color: '#d97706' }}>⬡</span>
             </div>
             <div style={{ flex: 1 }}>
@@ -769,7 +792,7 @@ export default function VoiceAgentPage() {
               <div style={css.appSub}>steve · orchestrator</div>
             </div>
             <Dot
-              color={openClawStatus?.status === 'online' ? '#d97706' : '#52525b'}
+              color={(openClawStatus?.status === 'online') ? '#d97706' : '#52525b'}
               pulse={openClawStatus?.status === 'online'}
             />
           </div>
@@ -780,10 +803,10 @@ export default function VoiceAgentPage() {
           <div style={css.section}>
             <SectionLabel>VOICE · LIVEKIT</SectionLabel>
             <div style={{ display: 'flex', justifyContent: 'center', padding: '2px 0' }}>
+              {/* AuraVisualizer: auraMode + rmsRef (no style prop) */}
               <AuraVisualizer
-                mode={auraMode}
-                analyserNode={analyserNode ?? undefined}
-                style={{ width: 72, height: 72 }}
+                auraMode={auraMode}
+                rmsRef={rmsRef as RefObject<number>}
               />
             </div>
             <button
@@ -841,15 +864,12 @@ export default function VoiceAgentPage() {
 
           {/* Stats bar */}
           <div style={css.statsBar}>
-            {([
-              ['Tasks',  stats.tasks,  '#a1a1aa'],
-              ['Done',   stats.done,   '#22c55e'],
-              ['Agents', stats.agents, '#3b82f6'],
-              ['Jobs',   stats.jobs,   '#a855f7'],
-              ['Nodes',  stats.custom, '#f59e0b'],
+            {([ ['Tasks', stats.tasks, '#a1a1aa'], ['Done', stats.done, '#22c55e'],
+                ['Agents', stats.agents, '#3b82f6'], ['Jobs', stats.jobs, '#a855f7'],
+                ['Nodes', stats.custom, '#f59e0b'],
             ] as [string, number, string][]).map(([lbl, val, clr]) => (
               <div key={lbl} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                <span style={{ fontFamily: "'Oxanium', sans-serif", fontWeight: 700, fontSize: 14, color: clr, lineHeight: 1 }}>{val}</span>
+                <span style={{ fontFamily: "'Oxanium',sans-serif", fontWeight: 700, fontSize: 14, color: clr, lineHeight: 1 }}>{val}</span>
                 <span style={{ fontSize: 7, color: '#30363d', letterSpacing: '0.1em' }}>{lbl}</span>
               </div>
             ))}
@@ -890,13 +910,13 @@ export default function VoiceAgentPage() {
               <Controls style={{ background: '#111318', border: '1px solid #1f2937', borderRadius: 8 }} />
               <MiniMap
                 style={{ background: '#0d1117', border: '1px solid #1f2937', borderRadius: 8 }}
-                nodeColor={(n) => {
+                nodeColor={(n: Node) => {
                   if (n.type === 'openClawNode')    return '#d97706'
                   if (n.type === 'branchNode')      return '#374151'
                   if (n.type === 'memoryFileNode')  return '#21262d'
                   if (n.type === 'groupHeaderNode') return (n.data?.color as string) ?? '#374151'
                   if (n.type === 'customNode')      return '#7c3aed'
-                  return sc(n.data?.status as string).border
+                  return sc(n.data?.status as string | undefined).border
                 }}
                 maskColor="rgba(0,0,0,0.65)"
               />
@@ -906,7 +926,7 @@ export default function VoiceAgentPage() {
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, pointerEvents: 'none', zIndex: 1 }}>
                 <div style={{ fontSize: 64, color: '#111827', lineHeight: 1 }}>⬡</div>
                 <div style={{ fontSize: 10, color: '#1f2937', letterSpacing: '0.12em' }}>Waiting for OpenClaw activity…</div>
-                <div style={{ fontSize: 9,  color: '#111827', letterSpacing: '0.1em' }}>tree updates every 3–10 s</div>
+                <div style={{ fontSize: 9, color: '#111827', letterSpacing: '0.1em' }}>tree updates every 3–10 s</div>
               </div>
             )}
           </div>
@@ -914,15 +934,6 @@ export default function VoiceAgentPage() {
       </div>
     </>
   )
-}
-
-// ─── Small presentational helpers ────────────────────────────────────────────
-
-function Divider() {
-  return <div style={{ height: 1, background: '#161b22', margin: '0 14px' }} />
-}
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <div style={{ fontSize: 8, fontWeight: 600, letterSpacing: '0.22em', color: '#30363d' }}>{children}</div>
 }
 
 // ─── Global CSS ───────────────────────────────────────────────────────────────
@@ -971,11 +982,18 @@ const css: Record<string, CSSProperties> = {
   },
   voiceBtnOn: { borderColor: '#22c55e', color: '#4ade80', background: '#052e16' },
   chatScroll: {
-    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7, minHeight: 0, paddingRight: 2,
-  } as CSSProperties,
-  bubble: { borderRadius: 6, padding: '7px 10px', fontSize: 10, lineHeight: 1.6, wordBreak: 'break-word' },
-  bubbleUser: { background: '#161b22', border: '1px solid #21262d', color: '#c9d1d9', alignSelf: 'flex-end', maxWidth: '90%' },
-  bubbleBot:  { background: '#051a0a', border: '1px solid #14532d44', color: '#4ade80', alignSelf: 'flex-start', maxWidth: '90%' },
+    flex: 1, overflowY: 'auto' as const, display: 'flex', flexDirection: 'column' as const,
+    gap: 7, minHeight: 0, paddingRight: 2,
+  },
+  bubble: { borderRadius: 6, padding: '7px 10px', fontSize: 10, lineHeight: 1.6, wordBreak: 'break-word' as const },
+  bubbleUser: {
+    background: '#161b22', border: '1px solid #21262d', color: '#c9d1d9',
+    alignSelf: 'flex-end' as const, maxWidth: '90%',
+  },
+  bubbleBot: {
+    background: '#051a0a', border: '1px solid #14532d44', color: '#4ade80',
+    alignSelf: 'flex-start' as const, maxWidth: '90%',
+  },
   chatInput: {
     flex: 1, background: '#0d1117', border: '1px solid #21262d', borderRadius: 6,
     color: '#c9d1d9', fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
@@ -987,7 +1005,7 @@ const css: Record<string, CSSProperties> = {
   },
   statsBar: { display: 'flex', borderTop: '1px solid #161b22', padding: '9px 8px', gap: 4 },
   canvas: {
-    flex: 1, display: 'flex', flexDirection: 'column', position: 'relative',
+    flex: 1, display: 'flex', flexDirection: 'column' as const, position: 'relative' as const,
     overflow: 'hidden', background: '#080b0e',
   },
   canvasBar: {
