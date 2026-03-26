@@ -25,6 +25,8 @@ from typing import Any, Literal, Optional
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 # ─── App ──────────────────────────────────────────────────────────────────────
@@ -41,14 +43,14 @@ app.add_middleware(
 
 # ─── Config from environment ──────────────────────────────────────────────────
 
-ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
-OPENCLAW_API_URL    = os.getenv("OPENCLAW_API_URL", "")
-OPENCLAW_API_KEY    = os.getenv("OPENCLAW_API_KEY", "")
+ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
+OPENCLAW_API_URL    = os.getenv("OPENCLAW_BASE_URL", os.getenv("OPENCLAW_API_URL", ""))
+OPENCLAW_API_KEY    = os.getenv("OPENCLAW_ACCESS_TOKEN", os.getenv("OPENCLAW_GATEWAY_TOKEN", os.getenv("OPENCLAW_API_KEY", "")))
 LIVEKIT_URL         = os.getenv("LIVEKIT_URL", "")
 LIVEKIT_API_KEY     = os.getenv("LIVEKIT_API_KEY", "")
-LIVEKIT_SECRET      = os.getenv("LIVEKIT_SECRET", "")
+LIVEKIT_SECRET      = os.getenv("LIVEKIT_API_SECRET", os.getenv("LIVEKIT_SECRET", ""))
 TELEGRAM_BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CLAUDE_MODEL        = os.getenv("CLAUDE_MODEL", "claude-opus-4-5")
+CLAUDE_MODEL        = os.getenv("CLAUDE_MODEL", os.getenv("OPENROUTER_MODEL", "claude-opus-4-5"))
 MEMORY_DIR          = os.getenv("MEMORY_DIR", "memory")
 
 # ─── In-memory stores ─────────────────────────────────────────────────────────
@@ -611,3 +613,17 @@ async def health():
         "jobs":       len(jobs_store),
         "tree_nodes": len(tree_nodes_store),
     }
+
+# --- Static files (React build) ---
+DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
+if os.path.isdir(DIST_DIR):
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        file_path = os.path.join(DIST_DIR, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(DIST_DIR, "index.html"))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
