@@ -1388,7 +1388,7 @@ function VoiceAgentPageInner() {
               )}
               {messages.map((m, i) => (
                 <div key={i} style={{ ...css.bubble, ...(m.role === 'user' ? css.bubbleUser : css.bubbleBot) }}>
-                  {m.text}
+                  {m.text.replace(/<action>[\s\S]*?<\/action>/gi, '').trim()}
                 </div>
               ))}
               {isSending && (
