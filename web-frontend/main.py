@@ -17,6 +17,8 @@ New in v2:
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import os
 import re
@@ -55,6 +57,11 @@ TELEGRAM_BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CLAUDE_MODEL        = os.getenv("CLAUDE_MODEL", os.getenv("OPENROUTER_MODEL", "claude-opus-4-5"))
 MEMORY_DIR          = os.getenv("MEMORY_DIR", "memory")
 
+# GitHub memory config
+GITHUB_TOKEN         = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO          = os.getenv("GITHUB_REPO", "")
+GITHUB_MEMORY_BRANCH = os.getenv("GITHUB_MEMORY_BRANCH", "main")
+
 # ─── In-memory stores ─────────────────────────────────────────────────────────
 
 tasks_store:      dict[str, dict] = {}
@@ -65,6 +72,10 @@ skills_store:     dict[str, dict] = {}
 outputs_store:    dict[str, dict] = {}
 activity_log:     list[dict]      = []
 
+# Queue of GitHub memory writes to be drained async after each request.
+# Each item: {"path": str, "content": str, "message": str, "mode": "write"|"append"}
+_memory_write_queue: list[dict] = []
+
 # Telegram counter — incremented by webhook
 telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karenkaty_bot"}
 
@@ -74,6 +85,7 @@ _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL | re.IGNORECASE)
 _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 _ACTION_STATUS_MAP = {"POST": "created", "PATCH": "updated", "DELETE": "deleted"}
+_LEARN_ALLOWED     = {"branding", "profile", "automations", "conversations"}
 
 
 def _log_activity(action_type: str, label: str, status: str = "action") -> None:
@@ -88,6 +100,134 @@ def _log_activity(action_type: str, label: str, status: str = "action") -> None:
     activity_log.append(entry)
     if len(activity_log) > 50:
         activity_log.pop(0)
+
+
+# ─── GitHub memory helpers ────────────────────────────────────────────────────
+
+_GH_HEADERS = {
+    "Accept":               "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+
+
+async def github_read_memory(path: str) -> str | None:
+    """Fetch a file from GitHub memory. Returns decoded string or None."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return None
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+    headers = {**_GH_HEADERS, "Authorization": f"Bearer {GITHUB_TOKEN}"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=headers, params={"ref": GITHUB_MEMORY_BRANCH})
+            if r.status_code != 200:
+                return None
+            encoded = r.json().get("content", "").replace("\n", "")
+            return base64.b64decode(encoded).decode("utf-8")
+    except Exception as exc:
+        print(f"[github_read_memory error] {exc}")
+        return None
+
+
+async def github_write_memory(path: str, content: str, message: str) -> bool:
+    """Create or update a file in GitHub memory. Returns True on success."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return False
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+    headers = {**_GH_HEADERS, "Authorization": f"Bearer {GITHUB_TOKEN}"}
+    try:
+        sha: str | None = None
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url, headers=headers, params={"ref": GITHUB_MEMORY_BRANCH})
+            if r.status_code == 200:
+                sha = r.json().get("sha")
+        put_body: dict = {
+            "message": message,
+            "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+            "branch":  GITHUB_MEMORY_BRANCH,
+        }
+        if sha:
+            put_body["sha"] = sha
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.put(url, headers=headers, json=put_body)
+            return r.status_code in (200, 201)
+    except Exception as exc:
+        print(f"[github_write_memory error] {exc}")
+        return False
+
+
+async def _process_memory_write_item(item: dict) -> None:
+    """Execute a queued memory write: append or replace, then persist to GitHub + local."""
+    path: str    = item["path"]
+    content: str = item["content"]
+    message: str = item.get("message", "Katy memory update")
+    mode: str    = item.get("mode", "write")
+    try:
+        if mode == "append":
+            existing = await github_read_memory(path) or _read_local_memory(path) or ""
+            # Rotate: never exceed 500 lines for append-mode files
+            lines = existing.splitlines(keepends=True)
+            if len(lines) > 480:
+                lines = lines[len(lines) - 480:]
+            final_content = "".join(lines) + content
+        else:
+            final_content = content
+
+        await github_write_memory(path, final_content, message)
+
+        # Mirror locally so /api/memory/{file} works without GitHub
+        local_rel  = path[len("memory/"):] if path.startswith("memory/") else path
+        local_path = os.path.join(MEMORY_DIR, local_rel)
+        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        with open(local_path, "w", encoding="utf-8") as f:
+            f.write(final_content)
+    except Exception as exc:
+        print(f"[_process_memory_write_item error] path={path}: {exc}")
+
+
+def _read_local_memory(path: str) -> str | None:
+    """Read a file from the local memory directory. Returns content or None."""
+    local_rel  = path[len("memory/"):] if path.startswith("memory/") else path
+    local_path = os.path.join(MEMORY_DIR, local_rel)
+    try:
+        with open(local_path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def _queue_memory_write(path: str, content: str, message: str, mode: str = "write") -> None:
+    """Enqueue a GitHub memory write (drained after each chat request)."""
+    _memory_write_queue.append({"path": path, "content": content, "message": message, "mode": mode})
+
+
+# ─── Memory content formatters ────────────────────────────────────────────────
+
+def _format_tasks_md() -> str:
+    now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    lines = [f"# Tasks Memory\n_Last updated: {now}_\n\n"]
+    if not tasks_store:
+        lines.append("_No tasks currently._\n")
+    else:
+        icons = {"pending": "⏳", "in_progress": "🔄", "completed": "✅"}
+        for task in sorted(tasks_store.values(), key=lambda t: t.get("created_at", 0)):
+            icon = icons.get(task["status"], "•")
+            dt   = time.strftime("%Y-%m-%d", time.gmtime(task.get("created_at", 0)))
+            lines.append(
+                f"- {icon} **{task['title']}** "
+                f"`{task['status']}` / `{task.get('category', 'short_term')}` _{dt}_\n"
+            )
+    return "".join(lines)
+
+
+def _format_activity_log_md() -> str:
+    now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    lines = [f"# Activity Log\n_Last updated: {now}_\n\n"]
+    for entry in activity_log[-500:]:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(entry["timestamp"]))
+        lines.append(
+            f"- `{ts}` **{entry['action_type']}** — {entry['label']} ({entry['status']})\n"
+        )
+    return "".join(lines)
 
 
 def _execute_action(raw: str) -> str:
@@ -128,6 +268,8 @@ def _execute_action(raw: str) -> str:
             "category":   body.get("category", "short_term"),
         }
         tasks_store[task_id] = task
+        _queue_memory_write("memory/tasks.md", _format_tasks_md(), f"Task created: {task['title']}")
+        _queue_memory_write("memory/activity_log.md", _format_activity_log_md(), "Activity log update")
         return f"✅ Created task: {task['title']} (id: {task_id})"
 
     # ── PATCH /api/tasks/{id} ────────────────────────────────────────────────
@@ -137,6 +279,8 @@ def _execute_action(raw: str) -> str:
             return f"⚠ Task not found: {task_id}"
         allowed = {k: v for k, v in body.items() if k in {"title", "status", "category", "source"}}
         tasks_store[task_id].update({**allowed, "updated_at": time.time()})
+        _queue_memory_write("memory/tasks.md", _format_tasks_md(), f"Task updated: {task_id}")
+        _queue_memory_write("memory/activity_log.md", _format_activity_log_md(), "Activity log update")
         return f"✅ Updated task {task_id}: {allowed}"
 
     # ── DELETE /api/tasks/{id} ───────────────────────────────────────────────
@@ -144,6 +288,8 @@ def _execute_action(raw: str) -> str:
         task_id = path.split("/")[-1]
         if task_id in tasks_store:
             del tasks_store[task_id]
+            _queue_memory_write("memory/tasks.md", _format_tasks_md(), f"Task deleted: {task_id}")
+            _queue_memory_write("memory/activity_log.md", _format_activity_log_md(), "Activity log update")
             return f"✅ Deleted task {task_id}"
         return f"⚠ Task not found: {task_id}"
 
@@ -159,6 +305,7 @@ def _execute_action(raw: str) -> str:
             "created_at": now,
         }
         agents_store[agent_id] = agent
+        _queue_memory_write("memory/activity_log.md", _format_activity_log_md(), "Activity log update")
         return f"✅ Created agent: {agent['name']} (id: {agent_id})"
 
     # ── PATCH /api/agents/{id} ───────────────────────────────────────────────
@@ -191,6 +338,7 @@ def _execute_action(raw: str) -> str:
             "updated_at": now,
         }
         jobs_store[job_id] = job
+        _queue_memory_write("memory/activity_log.md", _format_activity_log_md(), "Activity log update")
         return f"✅ Created job: {job['name']} (id: {job_id})"
 
     # ── PATCH /api/jobs/queue/{id} ───────────────────────────────────────────
@@ -257,7 +405,37 @@ def _execute_action(raw: str) -> str:
             "created_at": now,
         }
         outputs_store[output_id] = output
+        # Persist to GitHub memory/outputs/
+        ts        = time.strftime("%Y-%m-%d-%H%M%S", time.gmtime(now))
+        safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "", output["title"].replace(" ", "-"))[:30]
+        out_path  = f"memory/outputs/{ts}-{safe_name or 'output'}.md"
+        _queue_memory_write(out_path, output["content"], f"Output: {output['title']}")
+        _queue_memory_write("memory/activity_log.md", _format_activity_log_md(), "Activity log update")
         return f"✅ Created output: {output['title']} (id: {output_id})"
+
+    # ── POST /api/memory/learn ───────────────────────────────────────────────
+    if method == "POST" and path == "/api/memory/learn":
+        file_name = body.get("file", "")
+        if file_name not in _LEARN_ALLOWED:
+            return f"⚠ memory/learn: file must be one of {sorted(_LEARN_ALLOWED)}"
+        content   = body.get("content", "")
+        now_str   = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+        append_md = f"\n\n---\n_Learned: {now_str}_\n\n{content}\n"
+        _queue_memory_write(
+            f"memory/{file_name}.md", append_md,
+            f"Katy learned: {file_name}", mode="append",
+        )
+        return f"✅ Queued memory update for {file_name}.md"
+
+    # ── POST /api/memory/write ───────────────────────────────────────────────
+    if method == "POST" and path == "/api/memory/write":
+        file_name = body.get("file", "").lstrip("/").replace("..", "")
+        if not file_name:
+            return "⚠ memory/write: 'file' is required"
+        content = body.get("content", "")
+        message = body.get("message", "Katy memory write")
+        _queue_memory_write(f"memory/{file_name}", content, message)
+        return f"✅ Queued memory write for {file_name}"
 
     return f"⚠ Unknown endpoint: {endpoint}"
 
@@ -280,13 +458,13 @@ def execute_actions(text: str) -> tuple[str, list[str]]:
         result = _execute_action(raw)
         results.append(result)
 
-    # Fallback: ```json … ``` code blocks whose JSON contains 'title' or 'endpoint'
+    # Fallback: ```json … ``` code blocks — only if JSON has an 'endpoint' key
     fallback_blocks: list[str] = []
     for m in _CODE_BLOCK_RE.finditer(text):
         raw = m.group(1)
         try:
             data = json.loads(raw)
-            if isinstance(data, dict) and ("title" in data or "endpoint" in data):
+            if isinstance(data, dict) and "endpoint" in data:
                 result = _execute_action(raw)
                 results.append(result)
                 fallback_blocks.append(m.group(0))
@@ -419,6 +597,18 @@ class OutputCreate(BaseModel):
     title:   str
     content: str
     format:  str           = "text"
+
+
+class MemoryWriteRequest(BaseModel):
+    file:    str
+    content: str
+    message: str = "Katy memory update"
+
+
+class MemoryLearnRequest(BaseModel):
+    file:    str
+    content: str
+    message: str = "Katy learned new information"
 
 
 # ─── BASE INSTRUCTIONS ────────────────────────────────────────────────────────
@@ -589,6 +779,8 @@ POST   /api/tree/nodes
 PATCH  /api/tree/nodes/{id}
 DELETE /api/tree/nodes/{id}
 POST   /api/outputs
+POST   /api/memory/learn
+POST   /api/memory/write
 
 ─────────────────────────────────────────────────────────
 ## Examples
@@ -603,11 +795,43 @@ Create a tree node:
 Save an output (ALWAYS use this for content — NEVER paste into chat):
 <action>{"endpoint": "POST /api/outputs", "body": {"title": "Project Plan", "content": "# Plan\n...", "format": "markdown"}}</action>
 
+Save brand information to memory:
+<action>{"endpoint": "POST /api/memory/learn", "body": {"file": "branding", "content": "Brand name: Acme. Tone: friendly, bold. Primary colour: #d97706."}}</action>
+
 Create an agent:
 <action>{"endpoint": "POST /api/agents", "body": {"name": "researcher-1", "type": "researcher", "status": "active"}}</action>
 
 Create a job:
 <action>{"endpoint": "POST /api/jobs/queue", "body": {"name": "Daily report generation", "status": "queued"}}</action>
+
+─────────────────────────────────────────────────────────
+## GITHUB MEMORY — Your Persistent Brain
+─────────────────────────────────────────────────────────
+
+Your memory is stored in GitHub at memory/. It survives server restarts and grows
+smarter the more you work.
+
+Key memory files you own:
+  memory/tasks.md         — auto-synced on every task change
+  memory/activity_log.md  — auto-appended on every action
+  memory/branding.md      — brand voice, colours, tone, templates you learn
+  memory/profile.md       — user preferences, goals, business context
+  memory/automations.md   — active workflows and scheduled jobs
+  memory/conversations.md — key conversation summaries and decisions
+  memory/outputs/         — every generated output is saved here automatically
+  memory/assets/          — image/video URLs and descriptions (not binary)
+
+To save what you learn, use:
+  <action>{"endpoint": "POST /api/memory/learn", "body": {"file": "branding", "content": "..."}}</action>
+
+Available file values for /api/memory/learn: branding, profile, automations, conversations
+
+At the start of EVERY session:
+  Briefly summarise what you remember about the user (1–2 sentences) based on
+  what is shown in the memory branch of the tree (profile.md, branding.md).
+
+When you complete a task that produced content: it is already auto-saved to
+memory/outputs/ — confirm this to the user.
 
 ─────────────────────────────────────────────────────────
 ## Workflow Rules
@@ -626,6 +850,7 @@ Create a job:
 10. You may chain multiple <action> tags in a single response (they execute left to right).
 11. NEVER use markdown code fences or backticks to wrap actions — XML tags only.
 12. Content (documents, code, reports, plans) goes to /api/outputs — never into chat.
+13. When users share brand, business, or personal context — save it to memory immediately.
 """
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -836,7 +1061,9 @@ async def download_output(output_id: str):
 async def get_activity():
     return list(reversed(activity_log))[:20]
 
-MEMORY_FILES = {"profile", "tasks", "conversations", "automations"}
+# ─── Memory files ─────────────────────────────────────────────────────────────
+
+MEMORY_FILES = {"profile", "tasks", "conversations", "automations", "branding"}
 
 
 @app.get("/api/memory/{file_name}")
@@ -844,24 +1071,92 @@ async def get_memory_file(file_name: str):
     if file_name not in MEMORY_FILES:
         raise HTTPException(status_code=404, detail=f"Unknown memory file: {file_name}")
 
-    path = os.path.join(MEMORY_DIR, f"{file_name}.md")
+    local_path  = os.path.join(MEMORY_DIR, f"{file_name}.md")
+    content:    str | None = None
+    updated_at: float | None = None
+
+    # Try local first
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(local_path, encoding="utf-8") as f:
             content = f.read()
-        updated_at = os.path.getmtime(path)
+        updated_at = os.path.getmtime(local_path)
     except FileNotFoundError:
-        content = f"# {file_name}\n\n(no content yet)"
+        pass
+
+    # Fallback to GitHub if not found locally
+    if content is None:
+        gh_content = await github_read_memory(f"memory/{file_name}.md")
+        if gh_content:
+            content    = gh_content
+            updated_at = time.time()
+            # Cache locally for future requests
+            try:
+                os.makedirs(MEMORY_DIR, exist_ok=True)
+                with open(local_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception:
+                pass
+
+    if content is None:
+        content    = f"# {file_name}\n\n(no content yet)"
         updated_at = time.time()
 
     preview = content.strip()[:120].replace("\n", " ")
     return {
         "file":       file_name,
-        "path":       path,
+        "path":       local_path,
         "content":    content,
         "preview":    preview,
         "updated_at": updated_at,
         "size":       len(content.encode("utf-8")),
     }
+
+
+@app.post("/api/memory/write")
+async def write_memory_endpoint(body: MemoryWriteRequest):
+    """Write arbitrary content to a memory file (GitHub + local mirror)."""
+    safe_file = body.file.lstrip("/").replace("..", "").strip()
+    if not safe_file:
+        raise HTTPException(status_code=400, detail="'file' path is required")
+    path = f"memory/{safe_file}"
+    ok   = await github_write_memory(path, body.content, body.message)
+    # Mirror locally
+    local_path = os.path.join(MEMORY_DIR, safe_file)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+        with open(local_path, "w", encoding="utf-8") as f:
+            f.write(body.content)
+    except Exception as exc:
+        print(f"[memory write local error] {exc}")
+    return {"ok": ok, "path": path}
+
+
+@app.post("/api/memory/learn")
+async def learn_memory(body: MemoryLearnRequest):
+    """Append learned context to a named memory file (GitHub + local mirror)."""
+    if body.file not in _LEARN_ALLOWED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'file' must be one of: {sorted(_LEARN_ALLOWED)}",
+        )
+    path      = f"memory/{body.file}.md"
+    now_str   = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+    # Read existing content (local first, then GitHub)
+    local_path = os.path.join(MEMORY_DIR, f"{body.file}.md")
+    existing: str = _read_local_memory(path) or ""
+    if not existing:
+        gh = await github_read_memory(path)
+        existing = gh or f"# {body.file.capitalize()}\n\n"
+
+    new_content = existing.rstrip() + f"\n\n---\n_Learned: {now_str}_\n\n{body.content}\n"
+    ok = await github_write_memory(path, new_content, body.message)
+    try:
+        with open(local_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except Exception as exc:
+        print(f"[learn memory local error] {exc}")
+    return {"ok": ok, "file": path}
 
 # ─── Integration status ───────────────────────────────────────────────────────
 
@@ -1022,6 +1317,19 @@ async def openclaw_chat(body: ChatRequest):
     # Execute any <action>…</action> blocks embedded by the AI
     cleaned_text, action_results = execute_actions(raw_text)
 
+    # Drain memory write queue — deduplicate 'write' entries per path, then fire async
+    if _memory_write_queue:
+        pending_writes = _memory_write_queue[:]
+        _memory_write_queue.clear()
+        deduped: dict[str, dict] = {}
+        for item in pending_writes:
+            if item.get("mode", "write") == "write":
+                deduped[item["path"]] = item          # keep latest write per path
+            else:
+                deduped[f"{item['path']}:{id(item)}"] = item   # append: always run
+        for item in deduped.values():
+            asyncio.create_task(_process_memory_write_item(item))
+
     # Append a compact summary of executed actions (if any)
     if action_results:
         summary = "\n".join(action_results)
@@ -1070,13 +1378,14 @@ async def telegram_webhook(body: dict):
 @app.get("/health")
 async def health():
     return {
-        "status": "ok",
-        "tasks":      len(tasks_store),
-        "agents":     len(agents_store),
-        "jobs":       len(jobs_store),
-        "tree_nodes": len(tree_nodes_store),
-        "skills":     len(skills_store),
-        "outputs":    len(outputs_store),
+        "status":        "ok",
+        "tasks":         len(tasks_store),
+        "agents":        len(agents_store),
+        "jobs":          len(jobs_store),
+        "tree_nodes":    len(tree_nodes_store),
+        "skills":        len(skills_store),
+        "outputs":       len(outputs_store),
+        "github_memory": bool(GITHUB_TOKEN and GITHUB_REPO),
     }
 
 # --- Static files (React build) ---
