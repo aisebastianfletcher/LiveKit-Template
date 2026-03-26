@@ -148,6 +148,15 @@ interface Workflow {
   createdAt: number
 }
 
+interface Output {
+  id: string
+  task_id?: string
+  title: string
+  content: string
+  format: string
+  created_at: number
+}
+
 // ─── Skills data ──────────────────────────────────────────────────────────────
 
 const SKILLS_DATA: SkillDef[] = [

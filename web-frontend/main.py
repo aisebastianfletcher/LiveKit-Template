@@ -28,7 +28,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 # ─── App ──────────────────────────────────────────────────────────────────────
@@ -61,6 +61,8 @@ tasks_store:      dict[str, dict] = {}
 agents_store:     dict[str, dict] = {}
 jobs_store:       dict[str, dict] = {}
 tree_nodes_store: dict[str, dict] = {}
+skills_store:     dict[str, dict] = {}
+outputs_store:    dict[str, dict] = {}
 
 # Telegram counter — incremented by webhook
 telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karenkaty_bot"}
@@ -68,6 +70,7 @@ telegram_stats: dict[str, Any] = {"message_count": 0, "last_username": "karenkat
 # ─── Internal action executor ─────────────────────────────────────────────────
 
 _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL | re.IGNORECASE)
+_CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 def _execute_action(raw: str) -> str:
@@ -217,22 +220,62 @@ def _execute_action(raw: str) -> str:
             return f"✅ Deleted tree node {node_id}"
         return f"⚠ Tree node not found: {node_id}"
 
+    # ── POST /api/outputs ────────────────────────────────────────────────────
+    if method == "POST" and path == "/api/outputs":
+        output_id = str(uuid.uuid4())
+        now = time.time()
+        output = {
+            "id":         output_id,
+            "task_id":    body.get("task_id"),
+            "title":      body.get("title", "Untitled output")[:80],
+            "content":    body.get("content", ""),
+            "format":     body.get("format", "text"),
+            "created_at": now,
+        }
+        outputs_store[output_id] = output
+        print('[ACTION FIRED]')
+        return f"✅ Created output: {output['title']} (id: {output_id})"
+
     return f"⚠ Unknown endpoint: {endpoint}"
 
 
 def execute_actions(text: str) -> tuple[str, list[str]]:
     """Parse and execute all <action>…</action> blocks in *text*.
 
+    Also falls back to parsing ```json code blocks that contain 'title' or
+    'endpoint' keys (in case the model wraps actions in code fences instead).
+
     Returns:
-        cleaned_text  — response with all <action> tags stripped
+        cleaned_text  — response with all <action> tags and matched code blocks stripped
         results       — list of human-readable result strings, one per action
     """
     results: list[str] = []
+
+    # Primary path: <action>…</action> tags
     actions = _ACTION_RE.findall(text)
     for raw in actions:
+        print('[ACTION FIRED]')
         result = _execute_action(raw)
         results.append(result)
+
+    # Fallback: ```json … ``` code blocks whose JSON contains 'title' or 'endpoint'
+    fallback_blocks: list[str] = []
+    for m in _CODE_BLOCK_RE.finditer(text):
+        raw = m.group(1)
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and ("title" in data or "endpoint" in data):
+                print('[ACTION FIRED]')
+                result = _execute_action(raw)
+                results.append(result)
+                fallback_blocks.append(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Strip all action tags and matched code-block fallbacks from the reply
     cleaned = _ACTION_RE.sub("", text).strip()
+    for block in fallback_blocks:
+        cleaned = cleaned.replace(block, "").strip()
     return cleaned, results
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -331,6 +374,30 @@ class TreeNodeUpdate(BaseModel):
 class ChatRequest(BaseModel):
     message:              str
     conversation_history: list[dict] = Field(default_factory=list)
+    active_skills:        list[str]  = Field(default_factory=list)
+
+
+class SkillRegister(BaseModel):
+    id:          str
+    name:        str
+    category:    str
+    credentials: dict[str, str] = Field(default_factory=dict)
+
+
+class Output(BaseModel):
+    id:         str
+    task_id:    Optional[str]  = None
+    title:      str
+    content:    str
+    format:     str            = "text"
+    created_at: float          = Field(default_factory=time.time)
+
+
+class OutputCreate(BaseModel):
+    task_id: Optional[str] = None
+    title:   str
+    content: str
+    format:  str           = "text"
 
 
 # ─── BASE INSTRUCTIONS ────────────────────────────────────────────────────────
@@ -348,10 +415,47 @@ The GITWIX Agent tree shows the live system architecture:
   - Input channels: Telegram (@karenkaty_bot), Voice (LiveKit), Text Chat
   - OpenClaw (you): the central brain/router
   - Left branch: GitHub Memory files (profile.md, tasks.md, conversations.md, automations.md)
-  - Right branch: Workspace (Tasks, Agents, Jobs)
+  - Right branch: Workspace (Tasks, Agents, Jobs, Outputs)
   - Custom nodes: anything you create via /api/tree/nodes
 
 The user sees the tree updating LIVE. Use it to communicate your progress in real time.
+
+─────────────────────────────────────────────────────────
+## CHAT BEHAVIOUR RULES — MANDATORY
+─────────────────────────────────────────────────────────
+
+1. Keep chat replies SHORT. One to three sentences max. Do not write essays in chat.
+2. NEVER paste content (documents, reports, code, CSV, markdown, lists) into the chat message.
+   All generated content MUST be sent to /api/outputs — the user reads it in the Outputs panel.
+3. Before generating any content, ask the user for their preferred format:
+   "text", "markdown", "json", "csv", or "html".
+4. Once you have saved the content to /api/outputs, reply with exactly:
+   "Done, check your Outputs panel."
+5. Always create tree nodes to show your thinking steps. Use POST /api/tree/nodes
+   with type "thought" or "step" to visualise your reasoning in real time.
+
+─────────────────────────────────────────────────────────
+## HOW TO CALL APIS — CRITICAL — READ CAREFULLY
+─────────────────────────────────────────────────────────
+
+⚠ YOU MUST ONLY USE <action> XML TAGS TO CALL APIS. ⚠
+
+NEVER use markdown code blocks (``` or ```json) to emit actions.
+NEVER use backticks around action JSON.
+NEVER paste raw JSON into your chat reply.
+
+The ONLY correct format is:
+<action>{"endpoint": "METHOD /api/path", "body": {...}}</action>
+
+The system strips <action> tags before the user sees your reply, and executes them
+server-side. Any JSON outside <action> tags will NOT be executed and will confuse
+the user. Always use <action> tags — no exceptions.
+
+For PATCH and DELETE that need an id, put it in the path:
+<action>{"endpoint": "PATCH /api/tasks/TASK_ID_HERE", "body": {"status": "in_progress"}}</action>
+
+You cannot know the generated UUID in advance for PATCH/DELETE immediately after POST,
+so chain actions only when you already have a real id.
 
 ─────────────────────────────────────────────────────────
 ## TASK TREE CONTROL — Full API Reference
@@ -426,6 +530,20 @@ PATCH /api/jobs/queue/{job_id}
 
 DELETE /api/jobs/queue/{job_id}
 
+### Outputs — generated content (documents, reports, code, etc.)
+
+Use this to save ANY generated content. NEVER paste content into chat.
+
+POST /api/outputs
+{
+  "title":   "Descriptive output title (max 80 chars)",
+  "content": "The full generated content as a string",
+  "format":  "text" | "markdown" | "json" | "csv" | "html",
+  "task_id": "<optional: id of the related task>"
+}
+
+After saving an output, tell the user: "Done, check your Outputs panel."
+
 ### Memory files (read only)
 
 GET /api/memory/profile
@@ -435,37 +553,8 @@ GET /api/memory/automations
 → Returns { file, path, content, preview, updated_at, size }
 
 ─────────────────────────────────────────────────────────
-## HOW TO CALL APIS — CRITICAL, READ CAREFULLY
+## Supported action endpoints
 ─────────────────────────────────────────────────────────
-
-You CANNOT make HTTP requests yourself. Instead, embed API calls as <action> tags
-anywhere in your response text. The system will execute them server-side BEFORE
-sending your reply to the user.
-
-### Format
-<action>{"endpoint": "METHOD /api/path", "body": {...}}</action>
-
-For PATCH and DELETE that need an id, put it in the path:
-<action>{"endpoint": "PATCH /api/tasks/TASK_ID_HERE", "body": {"status": "in_progress"}}</action>
-
-You cannot know the generated UUID in advance for PATCH/DELETE immediately after POST,
-so chain actions only when you already have a real id.
-
-### Examples
-
-Create a task:
-<action>{"endpoint": "POST /api/tasks", "body": {"title": "Write poem about stars", "status": "pending", "category": "short_term"}}</action>
-
-Create a tree node:
-<action>{"endpoint": "POST /api/tree/nodes", "body": {"parent_id": "openclaw", "label": "Thinking…", "status": "thinking", "type": "thought"}}</action>
-
-Create an agent:
-<action>{"endpoint": "POST /api/agents", "body": {"name": "researcher-1", "type": "researcher", "status": "active"}}</action>
-
-Create a job:
-<action>{"endpoint": "POST /api/jobs/queue", "body": {"name": "Daily report generation", "status": "queued"}}</action>
-
-### Supported endpoints
 POST   /api/tasks
 PATCH  /api/tasks/{id}
 DELETE /api/tasks/{id}
@@ -478,6 +567,26 @@ DELETE /api/jobs/queue/{id}
 POST   /api/tree/nodes
 PATCH  /api/tree/nodes/{id}
 DELETE /api/tree/nodes/{id}
+POST   /api/outputs
+
+─────────────────────────────────────────────────────────
+## Examples
+─────────────────────────────────────────────────────────
+
+Create a task:
+<action>{"endpoint": "POST /api/tasks", "body": {"title": "Write poem about stars", "status": "in_progress", "category": "short_term"}}</action>
+
+Create a tree node:
+<action>{"endpoint": "POST /api/tree/nodes", "body": {"parent_id": "openclaw", "label": "Thinking…", "status": "thinking", "type": "thought"}}</action>
+
+Save an output (ALWAYS use this for content — NEVER paste into chat):
+<action>{"endpoint": "POST /api/outputs", "body": {"title": "Project Plan", "content": "# Plan\n...", "format": "markdown"}}</action>
+
+Create an agent:
+<action>{"endpoint": "POST /api/agents", "body": {"name": "researcher-1", "type": "researcher", "status": "active"}}</action>
+
+Create a job:
+<action>{"endpoint": "POST /api/jobs/queue", "body": {"name": "Daily report generation", "status": "queued"}}</action>
 
 ─────────────────────────────────────────────────────────
 ## Workflow Rules
@@ -494,6 +603,8 @@ DELETE /api/tree/nodes/{id}
 8. When spawning an agent, always emit a POST /api/agents action so it appears in the tree.
 9. NEVER show raw JSON in your reply — use <action> tags only, they are stripped automatically.
 10. You may chain multiple <action> tags in a single response (they execute left to right).
+11. NEVER use markdown code fences or backticks to wrap actions — XML tags only.
+12. Content (documents, code, reports, plans) goes to /api/outputs — never into chat.
 """
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -650,6 +761,54 @@ async def delete_tree_node(node_id: str):
         raise HTTPException(status_code=404, detail="Tree node not found")
     del tree_nodes_store[node_id]
 
+# ─── Skills ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/skills/active")
+async def get_active_skills():
+    return list(skills_store.values())
+
+
+@app.post("/api/skills/register")
+async def register_skill(body: SkillRegister):
+    skills_store[body.id] = body.model_dump()
+    return {"ok": True, "id": body.id}
+
+# ─── Outputs ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/outputs", response_model=list[Output])
+async def get_outputs():
+    return list(outputs_store.values())
+
+
+@app.post("/api/outputs", response_model=Output)
+async def create_output(body: OutputCreate):
+    output = Output(
+        id=str(uuid.uuid4()),
+        task_id=body.task_id,
+        title=body.title,
+        content=body.content,
+        format=body.format,
+        created_at=time.time(),
+    )
+    outputs_store[output.id] = output.model_dump()
+    return output
+
+
+@app.get("/api/outputs/{output_id}/download")
+async def download_output(output_id: str):
+    if output_id not in outputs_store:
+        raise HTTPException(status_code=404, detail="Output not found")
+    out = outputs_store[output_id]
+    ext_map = {"markdown": "md", "json": "json", "csv": "csv", "html": "html", "text": "txt"}
+    ext = ext_map.get(out["format"], "txt")
+    safe_title = re.sub(r"[^a-zA-Z0-9_\- ]", "", out["title"])[:40].strip().replace(" ", "_")
+    filename = f"{safe_title or 'output'}.{ext}"
+    return Response(
+        content=out["content"],
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 # ─── Memory files ─────────────────────────────────────────────────────────────
 
 MEMORY_FILES = {"profile", "tasks", "conversations", "automations"}
@@ -742,6 +901,22 @@ async def openclaw_chat(body: ChatRequest):
         {"role": "user", "content": body.message}
     ]
 
+    # Build skills context if active skills are provided
+    if body.active_skills:
+        skill_names = [
+            skills_store.get(sid, {}).get("name", sid)
+            for sid in body.active_skills
+        ]
+        skills_context = (
+            "\n\n## Active Skills\n"
+            "The user has the following skills configured and active: "
+            + ", ".join(skill_names)
+            + "\nYou may reference these integrations when helping the user.\n"
+        )
+        system_prompt = BASE_INSTRUCTIONS + skills_context
+    else:
+        system_prompt = BASE_INSTRUCTIONS
+
     raw_text: str = ""
 
     # Try OpenClaw gateway first
@@ -753,7 +928,7 @@ async def openclaw_chat(body: ChatRequest):
                     json={
                         "message": body.message,
                         "history": body.conversation_history,
-                        "system":  BASE_INSTRUCTIONS,
+                        "system":  system_prompt,
                     },
                     headers={"Authorization": f"Bearer {OPENCLAW_API_KEY}"},
                 )
@@ -785,7 +960,7 @@ async def openclaw_chat(body: ChatRequest):
                     json={
                         "model":      CLAUDE_MODEL,
                         "max_tokens": 1024,
-                        "messages":   [{"role": "system", "content": BASE_INSTRUCTIONS}] + messages,
+                        "messages":   [{"role": "system", "content": system_prompt}] + messages,
                     },
                 )
                 r.raise_for_status()
@@ -808,7 +983,7 @@ async def openclaw_chat(body: ChatRequest):
                     json={
                         "model":      CLAUDE_MODEL,
                         "max_tokens": 1024,
-                        "system":     BASE_INSTRUCTIONS,
+                        "system":     system_prompt,
                         "messages":   messages,
                     },
                 )
@@ -875,6 +1050,8 @@ async def health():
         "agents":     len(agents_store),
         "jobs":       len(jobs_store),
         "tree_nodes": len(tree_nodes_store),
+        "skills":     len(skills_store),
+        "outputs":    len(outputs_store),
     }
 
 # --- Static files (React build) ---
