@@ -1154,11 +1154,16 @@ function VoiceAgentPageInner() {
     const active_skills = Object.entries(skillConfigs)
       .filter(([, cfg]) => cfg.configured)
       .map(([id]) => id)
+    // Build conversation history from existing messages so Katy has multi-turn context
+    const conversation_history = messages.map((m) => ({
+      role:    m.role,
+      content: m.text,
+    }))
     try {
       const res  = await fetch('/api/openclaw/chat', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ message: text, active_skills }),
+        body:    JSON.stringify({ message: text, active_skills, conversation_history }),
       })
       const data = await res.json()
       setMessages((p) => [
@@ -1170,7 +1175,7 @@ function VoiceAgentPageInner() {
     } finally {
       setIsSending(false)
     }
-  }, [inputText, isSending, skillConfigs])
+  }, [inputText, isSending, skillConfigs, messages])
 
   // ── Skills handlers ───────────────────────────────────────────────────────
   const openSkillModal = useCallback((skill: SkillDef) => {
