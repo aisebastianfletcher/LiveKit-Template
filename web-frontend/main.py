@@ -88,6 +88,42 @@ _ACTION_STATUS_MAP = {"POST": "created", "PATCH": "updated", "DELETE": "deleted"
 _LEARN_ALLOWED     = {"branding", "profile", "automations", "conversations"}
 
 
+def _extract_json_object(text: str) -> str:
+    """Extract the first complete, brace-balanced JSON object from *text*.
+
+    The regex-based ``<action>`` parser uses a non-greedy ``.*?`` match up to
+    the first ``</action>``.  When a JSON string *value* contains the literal
+    substring ``</action>`` (e.g. agent instructions that demonstrate action-tag
+    syntax), the regex stops too early and yields truncated, invalid JSON.
+    This function re-parses the raw text character-by-character, properly
+    honouring JSON string boundaries and escape sequences, so it always returns
+    the correctly terminated object regardless of what the string values contain.
+    """
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("No JSON object found in text")
+    depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+        elif not in_string:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+    raise ValueError("Unterminated JSON object in text")
+
+
 def _log_activity(action_type: str, label: str, status: str = "action") -> None:
     """Append an entry to the activity log (capped at 50 items)."""
     entry: dict = {
@@ -452,9 +488,42 @@ def execute_actions(text: str) -> tuple[str, list[str]]:
     """
     results: list[str] = []
 
-    # Primary path: <action>…</action> tags
-    actions = _ACTION_RE.findall(text)
-    for raw in actions:
+    # Primary path: <action>…</action> tags.
+    #
+    # We use finditer (not findall) so that when the regex-captured content is
+    # truncated — which happens when a JSON string *value* contains the literal
+    # substring "</action>" (e.g. agent-instruction output that demonstrates
+    # action-tag syntax) — we can recover the complete JSON object by
+    # brace-counting from the match's start position in the original text.
+    #
+    # consumed_up_to tracks the end of the last properly-processed action block
+    # (including any extra text consumed during brace-count recovery).  Any
+    # subsequent regex match that starts before this offset is a spurious
+    # "<action>" tag found *inside* a previously-consumed JSON string value and
+    # must be skipped.
+    consumed_up_to: int = 0
+    for m in _ACTION_RE.finditer(text):
+        if m.start() < consumed_up_to:
+            continue  # this match is inside an already-consumed action block
+        raw = m.group(1)
+        try:
+            json.loads(raw.strip())
+            consumed_up_to = m.end()
+        except json.JSONDecodeError:
+            # The regex stopped at a "</action>" that was *inside* a JSON string
+            # value.  Re-extract using brace-counting from the original text.
+            try:
+                raw = _extract_json_object(text[m.start(1):])
+                # Advance consumed_up_to past the real closing </action> tag.
+                json_start_off = text[m.start(1):].find("{")
+                if json_start_off == -1:
+                    consumed_up_to = m.end()
+                else:
+                    json_end       = m.start(1) + json_start_off + len(raw)
+                    close_m        = re.search(r"</action>", text[json_end:], re.IGNORECASE)
+                    consumed_up_to = json_end + (close_m.end() if close_m else 0)
+            except ValueError:
+                consumed_up_to = m.end()
         result = _execute_action(raw)
         results.append(result)
 
