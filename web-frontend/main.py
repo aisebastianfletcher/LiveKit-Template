@@ -266,6 +266,13 @@ def _format_activity_log_md() -> str:
     return "".join(lines)
 
 
+def _auto_complete_task(task_id: str) -> None:
+    """Mark a task as completed and persist to memory. No-op if task not found."""
+    if task_id and task_id in tasks_store:
+        tasks_store[task_id].update({"status": "completed", "updated_at": time.time()})
+        _queue_memory_write("memory/tasks.md", _format_tasks_md(), f"Task auto-completed: {task_id}")
+
+
 def _execute_action(raw: str) -> str:
     """Execute a single JSON action dict against the in-memory stores.
     Returns a human-readable result string."""
@@ -432,9 +439,10 @@ def _execute_action(raw: str) -> str:
     if method == "POST" and path == "/api/outputs":
         output_id = str(uuid.uuid4())
         now = time.time()
+        task_id_ref = body.get("task_id")
         output = {
             "id":         output_id,
-            "task_id":    body.get("task_id"),
+            "task_id":    task_id_ref,
             "title":      body.get("title", "Untitled output")[:80],
             "content":    body.get("content", ""),
             "format":     body.get("format", "text"),
@@ -447,7 +455,13 @@ def _execute_action(raw: str) -> str:
         out_path  = f"memory/outputs/{ts}-{safe_name or 'output'}.md"
         _queue_memory_write(out_path, output["content"], f"Output: {output['title']}")
         _queue_memory_write("memory/activity_log.md", _format_activity_log_md(), "Activity log update")
-        return f"✅ Created output: {output['title']} (id: {output_id})"
+        result_msg = f"✅ Created output: {output['title']} (id: {output_id})"
+        # Auto-complete the linked task so it never stays stuck as in_progress
+        if task_id_ref:
+            _auto_complete_task(task_id_ref)
+            if task_id_ref in tasks_store:
+                result_msg += f"; ✅ Task {task_id_ref} marked completed"
+        return result_msg
 
     # ── POST /api/memory/learn ───────────────────────────────────────────────
     if method == "POST" and path == "/api/memory/learn":
@@ -1136,6 +1150,9 @@ async def create_output(body: OutputCreate):
         created_at=time.time(),
     )
     outputs_store[output.id] = output.model_dump()
+    # Auto-complete the linked task so it never stays stuck as in_progress
+    if body.task_id:
+        _auto_complete_task(body.task_id)
     return output
 
 

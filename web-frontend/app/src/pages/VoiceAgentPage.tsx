@@ -1379,21 +1379,21 @@ function VoiceAgentPageInner() {
           const newTasks: Task[] = await r.json()
           newTasks.forEach((t) => {
             const prevStatus = prevTaskStatusesRef.current.get(t.id)
-            // Detect any non-completed → completed transition
-            // (prevStatus must be defined so pre-existing completed tasks don't fade on page load)
-            if (
-              t.status === 'completed' &&
-              prevStatus !== undefined &&
-              prevStatus !== 'completed' &&
-              !hiddenTaskIdsRef.current.has(t.id)
-            ) {
-              setCompletingTasks((prev) => new Set([...prev, t.id]))
-              const tid = setTimeout(() => {
-                setCompletingTasks((prev) => { const next = new Set(prev); next.delete(t.id); return next })
+            if (t.status === 'completed' && !hiddenTaskIdsRef.current.has(t.id)) {
+              if (prevStatus === undefined) {
+                // Task was already completed before the page loaded — hide immediately
                 hiddenTaskIdsRef.current.add(t.id)
                 setHiddenTaskIds((prev) => new Set([...prev, t.id]))
-              }, 3000)
-              pendingTimeouts.push(tid)
+              } else if (prevStatus !== 'completed') {
+                // Detected transition from active → completed — play 3 s fade-out
+                setCompletingTasks((prev) => new Set([...prev, t.id]))
+                const tid = setTimeout(() => {
+                  setCompletingTasks((prev) => { const next = new Set(prev); next.delete(t.id); return next })
+                  hiddenTaskIdsRef.current.add(t.id)
+                  setHiddenTaskIds((prev) => new Set([...prev, t.id]))
+                }, 3000)
+                pendingTimeouts.push(tid)
+              }
             }
             prevTaskStatusesRef.current.set(t.id, t.status)
           })

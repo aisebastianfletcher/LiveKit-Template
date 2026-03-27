@@ -9,11 +9,13 @@
  *   POST /tools/fetch_url
  *   GET  /tools/get_time
  *   POST /tools/calculate
+ *   DELETE /api/tasks/:id - proxy delete to web-frontend API
  */
 
 const PORT = Number(process.env.PORT ?? 3001);
 const ACCESS_TOKEN = process.env.OPENCLAW_ACCESS_TOKEN ?? "";
 const FUNCTION_BUN_TOKEN = process.env.FUNCTION_BUN_TOKEN ?? "";
+const WEB_FRONTEND_URL = (process.env.WEB_FRONTEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 function isAuthorized(req: Request): boolean {
   // Check both tokens
@@ -151,6 +153,26 @@ Bun.serve({
       const body = await req.json() as Record<string, string>;
       if (!body.expression) return Response.json({ error: "Missing 'expression'" }, { status: 400 });
       return Response.json({ expression: body.expression, result: calculate(body.expression) });
+    }
+
+    // -- DELETE /api/tasks/:id  (proxy to web-frontend so agents can clean up completed tasks)
+    const taskDeleteMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+    if (taskDeleteMatch && req.method === "DELETE") {
+      const taskId = taskDeleteMatch[1];
+      try {
+        const upstream = await fetch(`${WEB_FRONTEND_URL}/api/tasks/${taskId}`, {
+          method: "DELETE",
+          headers: { "Authorization": req.headers.get("Authorization") ?? "" },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (upstream.status === 204) {
+          return new Response(null, { status: 204 });
+        }
+        const body = await upstream.json().catch(() => ({}));
+        return Response.json(body, { status: upstream.status });
+      } catch (err) {
+        return Response.json({ error: `Upstream error: ${err}` }, { status: 502 });
+      }
     }
 
     return Response.json({ error: "Not found" }, { status: 404 });
