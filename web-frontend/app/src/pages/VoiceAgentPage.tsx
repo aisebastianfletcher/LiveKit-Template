@@ -492,6 +492,8 @@ interface GraphData {
   voiceConnected: boolean
   chatMsgCount: number
   outputs: Output[]
+  completingTasks: Set<string>
+  hiddenTaskIds: Set<string>
 }
 
 function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
@@ -595,10 +597,13 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
   edges.push(mkEdge('br-workspace', 'grp-agents', 'dim'))
   edges.push(mkEdge('br-workspace', 'grp-jobs',   'dim'))
 
-  d.tasks.forEach((t) => {
-    nodes.push({ id: `task-${t.id}`,  type: 'taskNode',  position: { x: 0, y: 0 }, data: t as unknown as Record<string, unknown> })
-    edges.push(mkEdge('grp-tasks', `task-${t.id}`, 'faint'))
-  })
+  d.tasks
+    .filter((t) => !d.hiddenTaskIds.has(t.id))
+    .forEach((t) => {
+      const completing = d.completingTasks.has(t.id)
+      nodes.push({ id: `task-${t.id}`,  type: 'taskNode',  position: { x: 0, y: 0 }, data: { ...t, completing } as unknown as Record<string, unknown> })
+      edges.push(mkEdge('grp-tasks', `task-${t.id}`, 'faint'))
+    })
   d.agents.forEach((a) => {
     nodes.push({ id: `agent-${a.id}`, type: 'agentNode', position: { x: 0, y: 0 }, data: a as unknown as Record<string, unknown> })
     edges.push(mkEdge('grp-agents', `agent-${a.id}`, 'faint'))
@@ -609,8 +614,11 @@ function buildGraph(d: GraphData): { nodes: Node[]; edges: Edge[] } {
   })
 
   // Custom tree nodes
+  // thought nodes with status "done" are removed immediately — they are temporary scaffolding
   const knownIds = new Set(nodes.map((n) => n.id))
-  d.treeNodes.forEach((tn) => {
+  d.treeNodes
+    .filter((tn) => !(tn.type === 'thought' && tn.status === 'done'))
+    .forEach((tn) => {
     const nid = `custom-${tn.id}`
     nodes.push({
       id: nid, type: 'customNode', position: { x: 0, y: 0 },
@@ -834,23 +842,23 @@ const GroupHeaderNode = memo(({ data }: NodeProps) => (
 GroupHeaderNode.displayName = 'GroupHeaderNode'
 
 const TaskNode = memo(({ data }: NodeProps) => {
-  const t = data as unknown as Task
-  const c = sc(t.status)
-  const isActive = t.status === 'in_progress'
+  const t = data as unknown as Task & { completing?: boolean }
+  const c = sc(t.completing ? 'completed' : t.status)
+  const isActive = t.status === 'in_progress' && !t.completing
   return (
     <div
-      className={isActive ? 'hive-active' : undefined}
-      style={{ ...nBase, ...glowStyle(t.status), width: SZ.taskNode.w, height: SZ.taskNode.h, background: c.bg, borderColor: c.border }}>
+      className={t.completing ? 'node-completing' : (isActive ? 'hive-active' : undefined)}
+      style={{ ...nBase, ...glowStyle(t.completing ? 'completed' : t.status), width: SZ.taskNode.w, height: SZ.taskNode.h, background: c.bg, borderColor: c.border }}>
       <Handle type="target" position={Position.Top}    style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Bottom} style={HANDLE_STYLE} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7 }}>
-        <Dot color={c.dot} pulse={t.status === 'in_progress'} />
+        <Dot color={c.dot} pulse={t.status === 'in_progress' && !t.completing} />
         <span style={{ ...nTitle, color: c.text, flex: 1 }}>
           {t.title.length > 28 ? t.title.slice(0, 28) + '…' : t.title}
         </span>
       </div>
       <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
-        <span style={{ ...bdg, borderColor: c.border, color: c.text }}>{t.status}</span>
+        <span style={{ ...bdg, borderColor: c.border, color: c.text }}>{t.completing ? 'completed' : t.status}</span>
         <span style={{ ...bdg, color: '#4b5563', borderColor: '#374151' }}>
           {t.category === 'long_term' ? 'long-term' : 'short-term'}
         </span>
@@ -1352,9 +1360,53 @@ function VoiceAgentPageInner() {
   const [outputs,         setOutputs]         = useState<Output[]>([])
   const [activityLog,     setActivityLog]     = useState<ActivityEntry[]>([])
 
+  // ── Task completion cleanup state ─────────────────────────────────────────
+  // completingTasks: task IDs currently in their 3s fade-out animation
+  // hiddenTaskIds:   task IDs permanently removed from the tree after fade completes
+  const [completingTasks, setCompletingTasks] = useState<Set<string>>(new Set())
+  const [hiddenTaskIds,   setHiddenTaskIds]   = useState<Set<string>>(new Set())
+  // ref mirrors hiddenTaskIds so closure inside setInterval can read it without staleness
+  const hiddenTaskIdsRef = useRef<Set<string>>(new Set())
+  // tracks previous task statuses so we detect in_progress → completed transitions
+  const prevTaskStatusesRef = useRef<Map<string, string>>(new Map())
+
   useEffect(() => {
-    const go = async () => { try { const r = await fetch('/api/tasks');      if (r.ok) setTasks(await r.json())      } catch {} }
-    go(); const id = setInterval(go, 5000); return () => clearInterval(id)
+    const pendingTimeouts: ReturnType<typeof setTimeout>[] = []
+    const go = async () => {
+      try {
+        const r = await fetch('/api/tasks')
+        if (r.ok) {
+          const newTasks: Task[] = await r.json()
+          newTasks.forEach((t) => {
+            const prevStatus = prevTaskStatusesRef.current.get(t.id)
+            // Detect any non-completed → completed transition
+            // (prevStatus must be defined so pre-existing completed tasks don't fade on page load)
+            if (
+              t.status === 'completed' &&
+              prevStatus !== undefined &&
+              prevStatus !== 'completed' &&
+              !hiddenTaskIdsRef.current.has(t.id)
+            ) {
+              setCompletingTasks((prev) => new Set([...prev, t.id]))
+              const tid = setTimeout(() => {
+                setCompletingTasks((prev) => { const next = new Set(prev); next.delete(t.id); return next })
+                hiddenTaskIdsRef.current.add(t.id)
+                setHiddenTaskIds((prev) => new Set([...prev, t.id]))
+              }, 3000)
+              pendingTimeouts.push(tid)
+            }
+            prevTaskStatusesRef.current.set(t.id, t.status)
+          })
+          setTasks(newTasks)
+        }
+      } catch {}
+    }
+    go()
+    const id = setInterval(go, 5000)
+    return () => {
+      clearInterval(id)
+      pendingTimeouts.forEach((tid) => clearTimeout(tid))
+    }
   }, [])
 
   useEffect(() => {
@@ -1444,11 +1496,15 @@ function VoiceAgentPageInner() {
 
   // Stable graph key — only rebuild when data actually changes
   const graphKey = JSON.stringify({
-    t:  tasks.map((t)  => `${t.id}:${t.status}:${t.category}`),
+    t:  tasks
+          .filter((t) => !hiddenTaskIds.has(t.id))
+          .map((t) => `${t.id}:${t.status}:${t.category}:${completingTasks.has(t.id) ? 'c' : ''}`),
     a:  agents.map((a) => `${a.id}:${a.status}`),
     j:  jobs.map((j)   => `${j.id}:${j.status}`),
     m:  Object.keys(memoryFiles).map((k) => `${k}:${memoryFiles[k]?.updated_at ?? 0}`),
-    c:  treeNodes.map((n) => `${n.id}:${n.status}:${n.parent_id}`),
+    c:  treeNodes
+          .filter((n) => !(n.type === 'thought' && n.status === 'done'))
+          .map((n) => `${n.id}:${n.status}:${n.parent_id}`),
     tg: telegramStatus?.status,
     oc: `${openClawStatus?.status ?? ''}${openClawStatus?.model ?? ''}`,
     vc: isConnected,
@@ -1465,6 +1521,8 @@ function VoiceAgentPageInner() {
       voiceConnected: isConnected,
       chatMsgCount: messages.length,
       outputs,
+      completingTasks,
+      hiddenTaskIds,
     })
 
     // Determine which node IDs are in an active/thinking state for edge glow
@@ -2011,9 +2069,15 @@ const GLOBAL_CSS = `
     from { opacity: 0; transform: translateY(-5px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+  @keyframes node-flash-fade {
+    0%   { opacity: 1; box-shadow: 0 0 24px #22c55e, 0 0 8px #22c55e; }
+    17%  { opacity: 1; box-shadow: 0 0 32px #22c55eaa, 0 0 16px #22c55eaa; }
+    100% { opacity: 0; box-shadow: none; }
+  }
   .hive-active     { animation: hive-pulse 1.2s ease-in-out infinite; }
   .katy-heartbeat  { animation: katy-heartbeat 2s ease-in-out infinite; }
   .scheduled-job   { animation: scheduled-pulse 2s ease-in-out infinite; }
+  .node-completing { animation: node-flash-fade 3s ease-out forwards; pointer-events: none; }
   .react-flow__controls-button {
     background: #111318 !important; border-color: #1f2937 !important; color: #6b7280 !important;
     font-family: 'JetBrains Mono', monospace !important;
