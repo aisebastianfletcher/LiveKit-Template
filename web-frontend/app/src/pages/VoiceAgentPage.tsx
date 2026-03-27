@@ -1156,7 +1156,7 @@ function VoiceAgentPageInner() {
       .map(([id]) => id)
     // Build conversation history from existing messages so Katy has multi-turn context
     const conversation_history = messages.map((m) => ({
-      role:    m.role === 'user' ? 'user' : 'assistant',
+      role:    m.role,
       content: m.text,
     }))
     try {
