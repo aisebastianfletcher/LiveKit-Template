@@ -920,17 +920,35 @@ Step 3 — POST THE ACTUAL OUTPUT (write the FULL real content directly in the J
 Step 4 — Create output node:
 <action>{"endpoint": "POST /api/tree/nodes", "body": {"parent_id": "openclaw", "label": "<output ready label>", "status": "done", "type": "action"}}</action>
 
+Step 5 — Mark task completed (removes the gold glow from the task node):
+<action>{"endpoint": "PATCH /api/tasks/TASK_ID_FROM_STEP_1", "body": {"status": "completed"}}</action>
+
+Step 6 — Delete the thinking node (it served its purpose — the output node is the permanent deliverable):
+<action>{"endpoint": "DELETE /api/tree/nodes/THINKING_NODE_ID_FROM_STEP_2", "body": {}}</action>
+
+Step 7 — Set agent idle if you spawned one (removes the green glow so it goes dormant):
+<action>{"endpoint": "PATCH /api/agents/AGENT_ID_HERE", "body": {"status": "idle"}}</action>
+
 Then say (MAX 2 sentences): "Done! [Title] is ready — download card appeared above."
+
+CLEANUP RULES (CRITICAL — dashboard stays clean):
+- ALWAYS fire Steps 5 and 6 immediately after creating the output. No exceptions.
+- Step 7 is required only if you created an agent (POST /api/agents) during this task.
+- The output node (type: "action", status: "done") stays PERMANENTLY — it is the deliverable.
+- The thinking node (type: "thought") MUST be deleted — it is temporary scaffolding.
+- The task node fades off the dashboard once marked "completed".
+- The agent node stays on the tree but goes dim/idle — ready to be reused.
 
 YOU MUST NOT:
 - Stop after Step 1 or Step 2 waiting for something
 - Use a placeholder like "[content here]" in the content field
 - Split this into multiple conversation turns
 - Create sub-tasks for data gathering before generating
+- Leave the task, thinking node, or agent in an active/glowing state after the output is saved
 
 YOU MUST:
 - Write the complete actual document content in the "content" field of POST /api/outputs
-- Complete all 4 steps in one single response
+- Complete all steps (1–6, plus 7 if applicable) in one single response
 - The content must be substantial (at minimum 200 words for reports/articles)
 """
 
