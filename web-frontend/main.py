@@ -87,6 +87,54 @@ _CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _ACTION_STATUS_MAP = {"POST": "created", "PATCH": "updated", "DELETE": "deleted"}
 _LEARN_ALLOWED     = {"branding", "profile", "automations", "conversations"}
 
+# Regex to extract a UUID from a creation-result string like "(id: <uuid>)"
+_CREATED_ID_RE = re.compile(
+    r"\(id: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)"
+)
+
+# Maximum characters allowed inside an angle-bracket placeholder like
+# "<task id from Step 1>" — long enough for any reasonable description.
+_PH_INNER_LEN = 60
+
+# Placeholder patterns the LLM may write instead of real UUIDs (case-insensitive).
+# Examples from the system-prompt workflow: TASK_ID_HERE, TASK_ID_FROM_STEP_1,
+# TASK_TO_HERE, <task id from Step 1>, THINKING_NODE_ID_FROM_STEP_2, AGENT_ID_HERE …
+_TASK_PH_RE  = re.compile(
+    rf"\bTASK_ID[_A-Z0-9]*\b|\bTASK_TO_\w+\b|<task(?:\s+id)?[^\"'>]{{0,{_PH_INNER_LEN}}}>",
+    re.IGNORECASE,
+)
+_NODE_PH_RE  = re.compile(
+    rf"\bTHINKING_NODE_ID[_A-Z0-9]*\b|\bNODE_ID[_A-Z0-9]*\b|<(?:thinking_)?node(?:\s+id)?[^\"'>]{{0,{_PH_INNER_LEN}}}>",
+    re.IGNORECASE,
+)
+_AGENT_PH_RE = re.compile(
+    rf"\bAGENT_ID[_A-Z0-9]*\b|<agent(?:\s+id)?[^\"'>]{{0,{_PH_INNER_LEN}}}>",
+    re.IGNORECASE,
+)
+_JOB_PH_RE   = re.compile(
+    rf"\bJOB_ID[_A-Z0-9]*\b|<job(?:\s+id)?[^\"'>]{{0,{_PH_INNER_LEN}}}>",
+    re.IGNORECASE,
+)
+
+
+def _resolve_in_progress_task_id(task_id_ref: Optional[str]) -> Optional[str]:
+    """Return *task_id_ref* if it's in the tasks store, otherwise fall back to
+    the most-recently created in-progress task.  Returns *None* when no
+    in-progress task exists and *task_id_ref* itself was absent or unresolvable.
+    """
+    if task_id_ref and task_id_ref in tasks_store:
+        return task_id_ref
+    if task_id_ref:
+        # task_id_ref was provided but unknown (e.g. an unsubstituted placeholder)
+        fallback = max(
+            (t for t in tasks_store.values() if t.get("status") == "in_progress"),
+            key=lambda t: t.get("created_at", 0),
+            default=None,
+        )
+        if fallback:
+            return fallback["id"]
+    return task_id_ref
+
 
 def _extract_json_object(text: str) -> str:
     """Extract the first complete, brace-balanced JSON object from *text*.
@@ -439,7 +487,7 @@ def _execute_action(raw: str) -> str:
     if method == "POST" and path == "/api/outputs":
         output_id = str(uuid.uuid4())
         now = time.time()
-        task_id_ref = body.get("task_id")
+        task_id_ref = _resolve_in_progress_task_id(body.get("task_id"))
         output = {
             "id":         output_id,
             "task_id":    task_id_ref,
@@ -496,11 +544,55 @@ def execute_actions(text: str) -> tuple[str, list[str]]:
     Also falls back to parsing ```json code blocks that contain 'title' or
     'endpoint' keys (in case the model wraps actions in code fences instead).
 
+    When the LLM chains multiple actions in a single response it cannot know
+    the server-generated UUIDs returned by earlier steps.  It therefore writes
+    placeholder strings such as ``TASK_ID_FROM_STEP_1``, ``TASK_ID_HERE``,
+    ``TASK_TO_HERE``, ``THINKING_NODE_ID_FROM_STEP_2``, etc.  This function
+    tracks the IDs returned by each creation action and substitutes those
+    placeholders in every subsequent raw action string before execution.
+
     Returns:
         cleaned_text  — response with all <action> tags and matched code blocks stripped
         results       — list of human-readable result strings, one per action
     """
     results: list[str] = []
+
+    # Track the most-recently created ID for each entity type so we can
+    # substitute LLM-written placeholder strings in later actions.
+    _last_ids: dict[str, Optional[str]] = {
+        "task": None, "node": None, "agent": None, "job": None,
+    }
+
+    def _sub_phs(raw: str) -> str:
+        """Replace known placeholder tokens with real UUIDs collected so far."""
+        if _last_ids["task"]:
+            raw = _TASK_PH_RE.sub(_last_ids["task"], raw)
+        if _last_ids["node"]:
+            raw = _NODE_PH_RE.sub(_last_ids["node"], raw)
+        if _last_ids["agent"]:
+            raw = _AGENT_PH_RE.sub(_last_ids["agent"], raw)
+        if _last_ids["job"]:
+            raw = _JOB_PH_RE.sub(_last_ids["job"], raw)
+        return raw
+
+    def _capture_id(raw: str, result: str) -> None:
+        """After a creation action, store the returned UUID for later substitution."""
+        m = _CREATED_ID_RE.search(result)
+        if not m:
+            return
+        new_id = m.group(1)
+        try:
+            ep = json.loads(raw.strip()).get("endpoint", "")
+        except (json.JSONDecodeError, AttributeError):
+            return
+        if "POST /api/tasks" in ep:
+            _last_ids["task"] = new_id
+        elif "POST /api/tree/nodes" in ep:
+            _last_ids["node"] = new_id
+        elif "POST /api/agents" in ep:
+            _last_ids["agent"] = new_id
+        elif "POST /api/jobs" in ep:
+            _last_ids["job"] = new_id
 
     # Primary path: <action>…</action> tags.
     #
@@ -538,8 +630,10 @@ def execute_actions(text: str) -> tuple[str, list[str]]:
                     consumed_up_to = json_end + (close_m.end() if close_m else 0)
             except ValueError:
                 consumed_up_to = m.end()
+        raw = _sub_phs(raw)
         result = _execute_action(raw)
         results.append(result)
+        _capture_id(raw, result)
 
     # Fallback: ```json … ``` code blocks — only if JSON has an 'endpoint' key
     fallback_blocks: list[str] = []
@@ -548,8 +642,10 @@ def execute_actions(text: str) -> tuple[str, list[str]]:
         try:
             data = json.loads(raw)
             if isinstance(data, dict) and "endpoint" in data:
+                raw = _sub_phs(raw)
                 result = _execute_action(raw)
                 results.append(result)
+                _capture_id(raw, result)
                 fallback_blocks.append(m.group(0))
         except json.JSONDecodeError:
             pass
@@ -1141,9 +1237,12 @@ async def get_outputs():
 
 @app.post("/api/outputs", response_model=Output)
 async def create_output(body: OutputCreate):
+    # If task_id was provided but doesn't match a known task (e.g. a stale
+    # placeholder), fall back to the most-recently created in-progress task.
+    resolved_task_id = _resolve_in_progress_task_id(body.task_id)
     output = Output(
         id=str(uuid.uuid4()),
-        task_id=body.task_id,
+        task_id=resolved_task_id,
         title=body.title,
         content=body.content,
         format=body.format,
@@ -1151,8 +1250,8 @@ async def create_output(body: OutputCreate):
     )
     outputs_store[output.id] = output.model_dump()
     # Auto-complete the linked task so it never stays stuck as in_progress
-    if body.task_id:
-        _auto_complete_task(body.task_id)
+    if resolved_task_id:
+        _auto_complete_task(resolved_task_id)
     return output
 
 
