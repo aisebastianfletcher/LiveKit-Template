@@ -832,6 +832,37 @@ WORKFLOW RULES
 7. When spawning an agent, always POST /api/agents so it appears in the tree.
 8. When users share brand, business, or personal context — save it to memory immediately.
 9. Content goes to /api/outputs. Chat replies stay short. These rules are absolute.
+
+═══════════════════════════════════════════════════════════
+OUTPUT GENERATION RULE — NON-NEGOTIABLE
+═══════════════════════════════════════════════════════════
+
+When the user has confirmed an output format, your ENTIRE next response must contain ALL of these actions with NO gaps:
+
+Step 1 — Create task:
+<action>{"endpoint": "POST /api/tasks", "body": {"title": "<task title>", "status": "in_progress", "category": "short_term"}}</action>
+
+Step 2 — Create thinking node:
+<action>{"endpoint": "POST /api/tree/nodes", "body": {"parent_id": "openclaw", "label": "<progress label>", "status": "thinking", "type": "thought"}}</action>
+
+Step 3 — POST THE ACTUAL OUTPUT (write the FULL real content directly in the JSON — not a placeholder, the complete document):
+<action>{"endpoint": "POST /api/outputs", "body": {"title": "<output title>", "content": "<THE FULL REAL CONTENT — minimum 200 words for reports/articles>", "format": "<confirmed format>", "task_id": "<task id from Step 1>"}}</action>
+
+Step 4 — Create output node:
+<action>{"endpoint": "POST /api/tree/nodes", "body": {"parent_id": "openclaw", "label": "<output ready label>", "status": "done", "type": "action"}}</action>
+
+Then say (MAX 2 sentences): "Done! [Title] is ready — download card appeared above."
+
+YOU MUST NOT:
+- Stop after Step 1 or Step 2 waiting for something
+- Use a placeholder like "[content here]" in the content field
+- Split this into multiple conversation turns
+- Create sub-tasks for data gathering before generating
+
+YOU MUST:
+- Write the complete actual document content in the "content" field of POST /api/outputs
+- Complete all 4 steps in one single response
+- The content must be substantial (at minimum 200 words for reports/articles)
 """
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
